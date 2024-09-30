@@ -14,8 +14,8 @@ git push - pushes your files to the main branch. Do this when you are done with 
 
 nominal git command inputs
 
-git add . # the . adds all changed files to be staged for commit. can also enter specific files, this just makes it faster
+git add . | the . adds all changed files to be staged for commit. can also enter specific files, this just makes it faster
 
-git commit -m"<commit_message>" # commits all added files. -m attaches the message you want to the commit in the terminal. if you don't add a commit message, a text file will pop up and have you type out a message, so this just simplifies that a bit
+git commit -m"<commit_message>" | commits all added files. -m attaches the message you want to the commit in the terminal. if you don't add a commit message, a text file will pop up and have you type out a message, so this just simplifies that a bit
 
-git push # pushes all committed changes to github
+git push | pushes all committed changes to github
