@@ -1,5 +1,5 @@
 const int armTL[4] = {13, 23, 24, 25};
-const int armTR[4] = {26, 27, 28, 29};
+const int armTR[4] = {2, 3, 4, 5};
 const int armBL[4] = {30, 31, 32, 33};
 const int armBR[4] = {34, 35, 36, 37};
 

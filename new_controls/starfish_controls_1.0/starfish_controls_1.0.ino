@@ -10,4 +10,5 @@ pinActivate();
 
 void loop() {
   readInput();
+  runCommand(storedCommand);
 }
