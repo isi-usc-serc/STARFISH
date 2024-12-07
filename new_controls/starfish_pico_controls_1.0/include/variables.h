@@ -11,7 +11,7 @@ extern int analogDutyCycle;
 extern const int delayTime;
 
 extern String commandInput;
-extern const String commandInputList[];
+extern const String commandList[];
 extern int commandListLength;
 extern String storedCommand;
 extern int acceptedInputCounter;
@@ -23,4 +23,15 @@ struct CommandStruct {
 
 extern CommandStruct commandDict[];
 extern const int commandDictSize;
+
+extern const char delimiter;
+extern String commandInputList[];
+extern int commandInputListLength;
+extern bool validCondition;
+extern String invalidCommandList[];
+
+extern int invalidCounter;
+extern bool initVar;
+extern int commaCounter;
+extern int blankCounter;
 #endif

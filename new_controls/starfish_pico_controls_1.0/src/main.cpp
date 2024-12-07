@@ -6,11 +6,13 @@ void setup() {
 Serial.begin(9600);
 
 pinActivate();
-
 }
 
 void loop() {
+  initializationScript();
+
   readInput();
-  runCommand(storedCommand);
+  runCommand(commandInputList);
   resetVariables();
+
 }
