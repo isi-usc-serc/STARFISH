@@ -13,5 +13,7 @@ void splitString(String& commandInput, char delimiter, String commandInputList[]
 
 void initializationScript();
 void invalidDeclaration();
+void alternativeInvalidChecker();
+void invalidCommandPrinter();
 
 #endif

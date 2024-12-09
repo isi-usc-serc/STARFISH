@@ -35,20 +35,9 @@ void readInput(){
 
 void parseCommand(String commandInputList[], int commandListLength) {
 
-  if (commandInputListLength <= 0){
-    invalidCounter++;
-    blankCounter++;
-  }
+  alternativeInvalidChecker();
 
   for (int j = 0; j < commandInputListLength; j++) {
-    // if (commandInputList[j] == "" || commandInputList[j] == " "){
-    //   invalidCounter++;
-    //   blankCounter++;
-    // }
-    // else if (commandInputListLength <= 0){
-    //   invalidCounter++;
-    //   blankCounter++;
-    // }
 
     for (int i = 0; i < commandListLength; i++) { // Cycles through command list to ensure input is valid
 
@@ -64,10 +53,11 @@ void parseCommand(String commandInputList[], int commandListLength) {
       }
 
       if (acceptedInputCounter == -commandListLength) {
-        invalidCounter++;
         acceptedInputCounter = 0;
 
         invalidCommandList[invalidCounter] = commandInputList[j];
+        invalidCounter++;
+
       }
 
     }
@@ -76,12 +66,6 @@ void parseCommand(String commandInputList[], int commandListLength) {
 
   if (invalidCounter > 0){
     invalidDeclaration();
-  }
-  else if (blankCounter > 0){
-    validCondition = false;
-    Serial.println("No Commands Entered");
-    Serial.println("Please re-enter commands:\n");
-    blankCounter = 0;
   }
   else{
     validCondition = true;
@@ -176,10 +160,51 @@ void initializationScript(){
   }
 }
 
-void invalidDeclaration(){
+void invalidDeclaration(){ // All the serial printing for the invalid commands
   validCondition = false;
-  Serial.print("Invalid Command(s): ");
+  if (blankCounter > 0){ // Blank command print
+    validCondition = false;
+    Serial.print("No Commands Entered");
+    blankCounter = 0;
+  }
 
+  else if (dupeCounter > 0){ // Duplicate command print
+    validCondition = false;
+    Serial.println("Duplicate Commands Entered");
+    Serial.print("Invalid Command(s): ");
+    invalidCommandPrinter();
+    dupeCounter = 0;
+  }
+
+  else{ // All other regular invalid command print statements
+
+    Serial.print("Invalid Command(s): ");
+    invalidCommandPrinter();
+  }
+  Serial.println("\n");
+  Serial.println("Please re-enter commands:\n");
+  commaCounter = 0;
+}
+
+void alternativeInvalidChecker(){
+  if (commandInputListLength <= 0){ // Checks for a blank command input
+    invalidCounter++;
+    blankCounter++;
+  }
+
+  for (int j = 0; j < commandInputListLength; j++) { // Checks for duplicates in the command input
+    for (int k = j + 1; k < commandInputListLength; k++) {
+      if (commandInputList[j] == commandInputList[k]) {
+
+        invalidCommandList[invalidCounter] = commandInputList[j];
+        invalidCounter++;
+        dupeCounter++;
+      }
+    }
+  }
+}
+
+void invalidCommandPrinter(){
   for (int i = 0; i < commandListLength; i++) {
     if (invalidCommandList[i] != "") {
 
@@ -194,7 +219,4 @@ void invalidDeclaration(){
 
     }
   }
-  Serial.println("\n");
-  Serial.println("Please re-enter commands:\n");
-  commaCounter = 0;
 }

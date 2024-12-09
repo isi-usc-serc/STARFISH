@@ -41,3 +41,4 @@ int invalidCounter = 0; // counter for invalid commands
 bool initVar = false; // initialization variable for setup
 int commaCounter = 0;
 int blankCounter = 0;
+int dupeCounter = 0;

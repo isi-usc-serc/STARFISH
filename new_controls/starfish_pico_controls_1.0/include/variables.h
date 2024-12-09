@@ -34,4 +34,5 @@ extern int invalidCounter;
 extern bool initVar;
 extern int commaCounter;
 extern int blankCounter;
+extern int dupeCounter;
 #endif
