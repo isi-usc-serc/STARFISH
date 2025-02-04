@@ -1,56 +1,86 @@
-#!/usr/bin/env python
-#  -*- coding: utf-8 -*-
-"""
-    MCC 134 Functions Demonstrated:
-        mcc134.t_in_read
-
-    Purpose:
-        Read a single data value for each channel in a loop and save each trial to a unique file.
-
-    Description:
-        This example demonstrates acquiring data using a software timed loop
-        to read a single value from each selected channel on each iteration
-        of the loop and saving each trial to a uniquely named CSV file.
-"""
-
-from __future__ import print_function
-from time import sleep
-from sys import stdout
-from daqhats import mcc134, HatIDs, HatError, TcTypes
-from daqhats_utils import select_hat_device, tc_type_to_string
-import csv
-import datetime
-import os
-
-# Constants
-CURSOR_BACK_2 = '\x1b[2D'
-ERASE_TO_END_OF_LINE = '\x1b[0K'
-EXPORT_FOLDER = "data_exports"
-
-def generate_unique_filename():
-    """Generates a unique filename with a timestamp."""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    os.makedirs(EXPORT_FOLDER, exist_ok=True)
-    return os.path.join(EXPORT_FOLDER, f"trial_{timestamp}.csv")
-
-def save_trial_data(trial_number, data):
-    """Saves trial data to a uniquely named CSV file."""
-    filename = generate_unique_filename()
-    with open(filename, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Trial", "Channel", "Temperature (C)"])
-        for channel, value in data:
-            writer.writerow([trial_number, channel, value])
-    print(f"\nData saved to {filename}")
-
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
 def main():
-    """
-    This function is executed automatically when the module is run directly.
-    """
-    tc_type = TcTypes.TYPE_K   # change this to the desired thermocouple type
-    delay_between_reads = 1  # Seconds
+    """Main function to read temperature data and store it in a CSV file."""
+    tc_type = TcTypes.TYPE_K  # Change to desired thermocouple type
+    delay_between_reads = 1   # Seconds
     channels = (0, 1, 2, 3)
-
+    
     try:
         # Get an instance of the selected hat device object.
         address = select_hat_device(HatIDs.MCC_134)
@@ -63,47 +93,53 @@ def main():
         print('    Function demonstrated: mcc134.t_in_read')
         print('    Channels: ' + ', '.join(str(channel) for channel in channels))
         print('    Thermocouple type: ' + tc_type_to_string(tc_type))
+        
         try:
             input("\nPress 'Enter' to continue")
         except (NameError, SyntaxError):
             pass
 
-        print('\nAcquiring data ... Press Ctrl-C to abort')
+        print('\nAcquiring data ... Press Ctrl-C to stop')
 
-        # Display the header row for the data table.
+        # Generate a unique CSV file name for this run
+        csv_filename = generate_filename()
+
+        # Display the header row for the console output
         print('\n  Sample', end='')
         for channel in channels:
             print('     Channel', channel, end='')
         print('')
+        
+        samples_per_channel = 0
 
         try:
-            samples_per_channel = 0
             while True:
-                # Display the updated samples per channel count
                 samples_per_channel += 1
                 print('\r{:8d}'.format(samples_per_channel), end='')
 
-                # Read a single value from each selected channel.
-                trial_data = []
+                # Read a single value from each selected channel
+                data = {}
                 for channel in channels:
                     value = hat.t_in_read(channel)
                     if value == mcc134.OPEN_TC_VALUE:
                         print('     Open     ', end='')
-                        trial_data.append((channel, "Open"))
+                        data[channel] = "Open"
                     elif value == mcc134.OVERRANGE_TC_VALUE:
                         print('     OverRange', end='')
-                        trial_data.append((channel, "OverRange"))
+                        data[channel] = "OverRange"
                     elif value == mcc134.COMMON_MODE_TC_VALUE:
                         print('   Common Mode', end='')
-                        trial_data.append((channel, "Common Mode"))
+                        data[channel] = "Common Mode"
                     else:
                         print('{:12.2f} C'.format(value), end='')
-                        trial_data.append((channel, value))
+                        data[channel] = round(value, 2)
 
                 stdout.flush()
-                save_trial_data(samples_per_channel, trial_data)
 
-                # Wait the specified interval between reads.
+                # Save data to CSV
+                save_data_to_csv(csv_filename, samples_per_channel, data)
+
+                # Wait the specified interval between reads
                 sleep(delay_between_reads)
 
         except KeyboardInterrupt:
@@ -114,5 +150,4 @@ def main():
         print('\n', error)
 
 if __name__ == '__main__':
-    # This will only be run when the module is called directly.
     main()
