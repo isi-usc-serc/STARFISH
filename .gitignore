@@ -1,3 +1,15 @@
 **/build/*
 **/daqhats.egg-info/*
 dist/*
+docs/
+docsource/
+insall.sh
+LICENSE
+pyproject.toml
+README.md
+setup.cfg
+setup.py
+uninstall.sh
+version_history.txt
+examples/c/
+.DS_Store
