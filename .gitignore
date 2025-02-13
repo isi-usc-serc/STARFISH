@@ -3,7 +3,7 @@
 dist/*
 docs/
 docsource/
-insall.sh
+install.sh
 LICENSE
 pyproject.toml
 README.md
