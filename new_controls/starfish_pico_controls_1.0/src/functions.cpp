@@ -1,17 +1,27 @@
 #include <Arduino.h>
 #include "variables.h"
 #include "functionPrototypes.h"
-
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+#include <string>
+#include <unordered_map>
 
 void pinActivate() {
-
+  // Add pin validation
   for (int i = 0; i < 4; i++) {
+    // Validate pin numbers before setting mode
+    if (arm_a[i] >= MAX_PIN_NUMBER || arm_b[i] >= MAX_PIN_NUMBER || 
+        arm_c[i] >= MAX_PIN_NUMBER || arm_d[i] >= MAX_PIN_NUMBER) {
+      Serial.println("Error: Invalid pin number detected");
+      return;
+    }
+    
     pinMode(arm_a[i], OUTPUT);
     pinMode(arm_b[i], OUTPUT);
     pinMode(arm_c[i], OUTPUT);
     pinMode(arm_d[i], OUTPUT);
   }
-
 }
 
 
@@ -24,135 +34,148 @@ void readInput(){
     Serial.print("Command(s) Input: ");
     Serial.println(commandInput);
 
-    splitString(commandInput, delimiter, commandInputList, commandInputListLength); // Splits the input string into an array
+    splitString(commandInput, delimiter, commandInputList); // Splits the input string into an array
 
-    parseCommand(commandInputList, commandListLength); // Function parses the command and ensures it is valid
+    parseCommand(commandInputList); // Function parses the command and ensures it is valid
 
   }
 
 }
 
 
-void parseCommand(String commandInputList[], int commandListLength) {
-
+void parseCommand(std::vector<String>& commandInputList) {
+  // Check for blank/duplicate commands first
   alternativeInvalidChecker();
-
-  for (int j = 0; j < commandInputListLength; j++) {
-
-    for (int i = 0; i < commandListLength; i++) { // Cycles through command list to ensure input is valid
-
-      if (commandInputList[j] == commandList[i]){
-
-        acceptedInputCounter++;
-
-      }
-      else {
-
-        acceptedInputCounter--;
-
-      }
-
-      if (acceptedInputCounter == -commandListLength) {
-        acceptedInputCounter = 0;
-
-        invalidCommandList[invalidCounter] = commandInputList[j];
-        invalidCounter++;
-
-      }
-
-    }
-    acceptedInputCounter = 0;
-  }
-
-  if (invalidCounter > 0){
+  if (invalidCounter > 0) {
     invalidDeclaration();
-  }
-  else{
-    validCondition = true;
-  }
-}
-
-void runCommand(String commandInputList[]) {
-  if (validCondition == false) {
-
     return;
   }
-  else {
-    for (int i = 0; i < commandDictSize; i++) { // loops through commandDict struct to activate proper pin with PWM
 
-      for (int j = 0; j < commandInputListLength; j++) {
+  std::unordered_set<std::string> commandSet;
+  for (const auto& cmd : commandList) {
+      commandSet.insert(std::string(cmd.c_str()));
+  }
+    invalidCommandList.clear();  // Clear invalid command list
 
-        if (commandDict[i].name == commandInputList[j]) { 
-
-          // Serial.println(commandDict[i].name);
-          analogWrite(commandDict[i].pin, analogDutyCycle); // analogDutyCycle gives the proper analog output for PWM control
-
-        }
+  for (const auto& command : commandInputList) {
+    if (commandSet.find(std::string(command.c_str())) == commandSet.end()) {
+      invalidCommandList.push_back(command);
       }
-    }
   }
 
-  Serial.print("Command(s) Executing: ");
-  for (int i = 0; i < commandInputListLength; i++) {
-      if (commandInputList[i] != "") {
+  validCondition = invalidCommandList.empty();
+  if (!validCondition) {
+      invalidDeclaration();
+  }
+}
 
-        Serial.print(commandInputList[i]);
-        Serial.print(", ");
+void runCommand(std::vector<String>& commandInputList) {
 
+  if (commandInputList.empty()) return;
+
+  // Ensure the command list is not too large
+  if (commandInputList.size() > 16) {
+      Serial.println("Error: Too many commands");
+      return;
+  }
+
+  // If there are invalid commands, do not proceed
+  if (!validCondition) return;
+
+  // Convert command dictionary to an unordered_map for fast lookup
+  for (const auto& pair : commandDict) {
+    commandMap[std::string(pair.first.c_str())] = pair.second;
+  }
+
+  Serial.print("Executing Commands: ");
+  
+  for (const auto& command : commandInputList) {
+      // Check if command exists in the dictionary
+      if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
+        int pin = commandMap[std::string(command.c_str())];  // Convert to std::string
+
+          // **Pin validation**
+          if (pin < 0 || pin > MAX_PIN_NUMBER) {
+              Serial.print("Error: Invalid pin ");
+              Serial.println(pin);
+              continue;
+          }
+
+          // Execute command
+          analogWrite(pin, analogDutyCycle);
+          Serial.print(command + ", ");
       }
-    }
+  }
   Serial.println();
 
-  delay(delayTime); // delay for actuation time
-  for (int i = 0; i < commandDictSize; i++) {
-    analogWrite(commandDict[i].pin, 0); // deactivates the pin after the delay
+  delay(delayTime);
+
+  // **Deactivate all pins safely**
+  for (const auto& cmd : commandMap) {
+      int pin = cmd.second;
+      if (pin >= 0 && pin <= MAX_PIN_NUMBER) {  // Validate before setting
+          analogWrite(pin, 0);
+      }
   }
 
-  if (validCondition == true) {
-    Serial.println("Commands Completed");
-    Serial.println();
-  }
-  
-  resetVariables(); // resets variables for next command
-  return; // Exit the function once the command is found
+  Serial.println("Commands Completed\n");
+
+  resetVariables();
 }
 
 void resetVariables() {
+  // Ensure all pins are set to zero before resetting
+  for (int i = 0; i < 16; i++) {
+      analogWrite(i, 0);
+  }
+  
+  // Clear all containers safely
+  commandInputList.clear();
+  invalidCommandList.clear();
+  
+  // Reset all flags and counters
   commandInput = "";
   storedCommand = "";
   acceptedInputCounter = 0;
   validCondition = false;
-  for (int i = 0; i < commandInputListLength; ++i) {
-    commandInputList[i] = "";
-  }
-  for (int i = 0; i < commandListLength; ++i) {
-    invalidCommandList[i] = "";
-  }
   invalidCounter = 0;
+  commaCounter = 0;
+  blankCounter = 0;
+  dupeCounter = 0;
 }
 
-void splitString(String& commandInput, char delimiter, String commandInputList[], int& commandInputListLength) {
-  int index = 0;
+void splitString(String& commandInput, char delimiter, std::vector<String>& commandInputList) {
+  commandInputList.clear();  // Ensure the vector is empty before adding new elements
   int temp = commandInput.length() + 1;
-  char input[temp];
-  commandInput.toCharArray(input, commandInput.length() + 1); // Convert String to char array
-  
-  char delimiterStr[] = {delimiter, '\0'}; // Convert delimiter to char array
-  char* token = strtok(input, delimiterStr); // Get the first token
-  while (token != nullptr) {
-    commandInputList[index++] = String(token); // Convert token back to String and store in result array
-    token = strtok(nullptr, delimiterStr); // Get the next token
-  }
-  commandInputListLength = index; // Update size with the number of tokens found
 
-  // for (int i = 0; i < commandInputListLength; i++) { // Print the results
-  //   Serial.println(commandInputList[i]);
-  // }
+  // Add size check to prevent buffer overflow
+  if (temp > 256) { // Or whatever maximum size is appropriate
+      Serial.println("Error: Input command too long");
+      return;
+  }
+  
+  // Use a vector for safe memory allocation
+  std::vector<char> input(temp);
+
+  // Copy the command input to the input vector
+  strncpy(input.data(), commandInput.c_str(), temp);
+  input[temp - 1] = '\0';
+
+  // Create a delimiter string
+  char delimiterStr[] = {delimiter, '\0'};
+
+  // Tokenize the input string
+  char* token = strtok(input.data(), delimiterStr);
+  while (token != nullptr) {
+      commandInputList.push_back(String(token));  // Use push_back to dynamically add elements
+      token = strtok(nullptr, delimiterStr);
+  }
 }
+
 
 void initializationScript(){
   if (Serial.available()) {
-    if (initVar == false){;
+    if (initVar == false){
       Serial.println("Initilization Complete");
       Serial.println("Enter a command when ready:\n");
       initVar = true;
@@ -186,37 +209,34 @@ void invalidDeclaration(){ // All the serial printing for the invalid commands
   commaCounter = 0;
 }
 
-void alternativeInvalidChecker(){
-  if (commandInputListLength <= 0){ // Checks for a blank command input
-    invalidCounter++;
-    blankCounter++;
+void alternativeInvalidChecker() {
+  commandCount.clear();  // Add this line at the start of the function
+
+  if (commandInputList.empty()) { // Checks for a blank command input
+      invalidCounter++;
+      blankCounter++;
   }
 
-  for (int j = 0; j < commandInputListLength; j++) { // Checks for duplicates in the command input
-    for (int k = j + 1; k < commandInputListLength; k++) {
-      if (commandInputList[j] == commandInputList[k]) {
 
-        invalidCommandList[invalidCounter] = commandInputList[j];
-        invalidCounter++;
-        dupeCounter++;
+  for (const auto& command : commandInputList) {
+      commandCount[std::string(command.c_str())]++;
+  }
+
+  for (const auto& entry : commandCount) {
+      if (entry.second > 1) {  // If command appears more than once, it's a duplicate
+        invalidCommandList.push_back(String(entry.first.c_str()));  // ✅ Convert std::string → Arduino String
+        dupeCounter++;  // Increment only once per duplicate command type
+          invalidCounter++;
       }
-    }
   }
 }
 
-void invalidCommandPrinter(){
-  for (int i = 0; i < commandListLength; i++) {
-    if (invalidCommandList[i] != "") {
 
-      if (commaCounter == 1){
-        Serial.print(", ");
-      }
+void invalidCommandPrinter() {
+  for (size_t i = 0; i < invalidCommandList.size(); i++) {
       Serial.print(invalidCommandList[i]);
-      if (commaCounter > 0){
-        Serial.print(", ");
+      if (i < invalidCommandList.size() - 1) {
+          Serial.print(", ");
       }
-      commaCounter++;
-
-    }
   }
 }

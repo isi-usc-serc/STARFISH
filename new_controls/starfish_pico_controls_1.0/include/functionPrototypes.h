@@ -3,17 +3,19 @@
 
 void pinActivate();
 void readInput();
-void parseCommand(String commandInputList[], int commandListLength);
+void parseCommand(std::vector<String>& commandInputList);
 void coilActuation();
 void coilDeactivation();
-void runCommand(String commandInputList[]);
+void runCommand(std::vector<String>& commandInputList);
 void resetVariables();
 
-void splitString(String& commandInput, char delimiter, String commandInputList[], int& commandInputListSize);
+void splitString(String& commandInput, char delimiter, std::vector<String>& commandInputList);
 
 void initializationScript();
 void invalidDeclaration();
 void alternativeInvalidChecker();
 void invalidCommandPrinter();
+
+String trim(const String& str);
 
 #endif

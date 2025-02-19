@@ -5,14 +5,13 @@
 void setup() {
 Serial.begin(9600);
 
+delay(1000);
 pinActivate();
+initializationScript();
+
 }
 
 void loop() {
-  initializationScript();
-
   readInput();
   runCommand(commandInputList);
-  resetVariables();
-
 }
