@@ -15,10 +15,11 @@ constexpr int arm_c[4] = {8, 9, 10, 11}; // pins numbers for arm c
 constexpr int arm_d[4] = {12, 13, 14, 15}; // pins numbers for arm d
 
 // Control parameters
-const int dutyCycle = 100; // desired duty cycle (as a percent)
+const int dutyCycle = 50; // desired duty cycle (as a percent)
 const int delayTime = 2*5000; // desired actuation time
 int analogDutyCycle = (dutyCycle > 0 && dutyCycle <= 100) ? 
                      static_cast<int>((dutyCycle / 100.0) * 255) : 0;
+int singleAnalogDutyCycle = analogDutyCycle/2;
 
 // Command related variables
 String commandInput; // reads serial input
@@ -51,3 +52,9 @@ int dupeCounter = 0;
 
 std::unordered_map<std::string, int> commandCount;
 std::unordered_map<std::string, int> commandMap;
+
+int phaseShift = delayTime/2;
+int currentPinIndex = 0;
+int staggeredDelay = 0;
+
+std::vector<PinState> activePins;

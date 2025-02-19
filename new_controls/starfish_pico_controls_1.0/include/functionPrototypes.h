@@ -18,4 +18,11 @@ void invalidCommandPrinter();
 
 String trim(const String& str);
 
+void preRunCheck();
+void commandExecution(std::vector<String>& commandInputList);
+void activatePWM(int pin, int dutyCycle, int pinIndex, int totalPins);
+void deactivatePWM(int pin);
+
+
+
 #endif

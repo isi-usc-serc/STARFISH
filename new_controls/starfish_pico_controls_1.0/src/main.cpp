@@ -13,5 +13,8 @@ initializationScript();
 
 void loop() {
   readInput();
-  runCommand(commandInputList);
+  // Only run commands if there are actually commands to process
+  if (!commandInputList.empty() && validCondition) {
+    runCommand(commandInputList);
+  }
 }

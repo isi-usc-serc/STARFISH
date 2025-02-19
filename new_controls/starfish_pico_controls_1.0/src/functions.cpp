@@ -25,21 +25,22 @@ void pinActivate() {
 }
 
 
-void readInput(){
-
-  if (Serial.available()) {
-    commandInput = Serial.readStringUntil('\n'); // Reads input string
-    commandInput.trim(); // Trims out the whitespace from the input string
-
-    Serial.print("Command(s) Input: ");
-    Serial.println(commandInput);
-
-    splitString(commandInput, delimiter, commandInputList); // Splits the input string into an array
-
-    parseCommand(commandInputList); // Function parses the command and ensures it is valid
-
-  }
-
+void readInput() {
+    if (Serial.available() > 0) {
+        commandInput = Serial.readStringUntil('\n');
+        commandInput.trim();  // Remove any whitespace
+        
+        // Clear previous command list
+        commandInputList.clear();
+        invalidCommandList.clear();
+        validCondition = false;  // Reset validation flag
+        
+        // Only process if there's actual input
+        if (commandInput.length() > 0) {
+            splitString(commandInput, delimiter, commandInputList);
+            parseCommand(commandInputList);
+        }
+    }
 }
 
 
@@ -70,57 +71,26 @@ void parseCommand(std::vector<String>& commandInputList) {
 }
 
 void runCommand(std::vector<String>& commandInputList) {
+    static bool isExecuting = false;
+    
+    // Prevent double execution
+    if (isExecuting) {
+        return;
+    }
+    
+    isExecuting = true;
+    
+    // Regular command execution
+    preRunCheck();
+    
+    for (const auto& pair : commandDict) {
+        commandMap[std::string(pair.first.c_str())] = pair.second;
+    }
 
-  if (commandInputList.empty()) return;
-
-  // Ensure the command list is not too large
-  if (commandInputList.size() > 16) {
-      Serial.println("Error: Too many commands");
-      return;
-  }
-
-  // If there are invalid commands, do not proceed
-  if (!validCondition) return;
-
-  // Convert command dictionary to an unordered_map for fast lookup
-  for (const auto& pair : commandDict) {
-    commandMap[std::string(pair.first.c_str())] = pair.second;
-  }
-
-  Serial.print("Executing Commands: ");
-  
-  for (const auto& command : commandInputList) {
-      // Check if command exists in the dictionary
-      if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
-        int pin = commandMap[std::string(command.c_str())];  // Convert to std::string
-
-          // **Pin validation**
-          if (pin < 0 || pin > MAX_PIN_NUMBER) {
-              Serial.print("Error: Invalid pin ");
-              Serial.println(pin);
-              continue;
-          }
-
-          // Execute command
-          analogWrite(pin, analogDutyCycle);
-          Serial.print(command + ", ");
-      }
-  }
-  Serial.println();
-
-  delay(delayTime);
-
-  // **Deactivate all pins safely**
-  for (const auto& cmd : commandMap) {
-      int pin = cmd.second;
-      if (pin >= 0 && pin <= MAX_PIN_NUMBER) {  // Validate before setting
-          analogWrite(pin, 0);
-      }
-  }
-
-  Serial.println("Commands Completed\n");
-
-  resetVariables();
+    commandExecution(commandInputList);
+    
+    resetVariables();
+    isExecuting = false;
 }
 
 void resetVariables() {
@@ -231,7 +201,6 @@ void alternativeInvalidChecker() {
   }
 }
 
-
 void invalidCommandPrinter() {
   for (size_t i = 0; i < invalidCommandList.size(); i++) {
       Serial.print(invalidCommandList[i]);
@@ -239,4 +208,113 @@ void invalidCommandPrinter() {
           Serial.print(", ");
       }
   }
+}
+
+
+void preRunCheck(){
+  if (commandInputList.empty()) return;
+
+  // Ensure the command list is not too large
+  if (commandInputList.size() > 16) {
+    Serial.println("Error: Too many commands");
+    return;
+  }
+
+  // If there are invalid commands, do not proceed
+  if (!validCondition) return;
+  
+}
+
+void commandExecution(std::vector<String>& commandInputList) {
+  int totalPins = commandInputList.size();
+  std::vector<PinState> activeStates;
+  
+  // Initialize all pin states
+  for (const auto& command : commandInputList) {
+    if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
+      int pin = commandMap[std::string(command.c_str())];
+      if (pin >= 0 && pin <= MAX_PIN_NUMBER) {
+        PinState pinState = {pin, 0, false};
+        activeStates.push_back(pinState);
+      }
+    }
+  }
+
+  Serial.print("Executing Commands: ");
+  
+  unsigned long lastCheckTime = 0;
+  const unsigned long CHECK_INTERVAL = 100;  // Check every 100ms
+  
+  // Start the first two pins
+  unsigned long startTime = millis();
+  int activeCount = 0;
+  int pinIndex = 0;
+  
+  // Initial activation of up to 2 pins
+  for (int i = 0; i < min(2, (int)activeStates.size()); i++) {
+    activeStates[i].startTime = startTime;
+    activeStates[i].isActive = true;
+    activatePWM(activeStates[i].pin, analogDutyCycle, pinIndex++, totalPins);
+    activeCount++;
+  }
+
+  // Main control loop
+  while (!activeStates.empty()) {
+    unsigned long currentTime = millis();
+    
+    // Only process updates at regular intervals
+    if (currentTime - lastCheckTime >= CHECK_INTERVAL) {
+      lastCheckTime = currentTime;
+      
+      // Process active pins
+      for (auto& pinState : activeStates) {
+        unsigned long elapsedTime = currentTime - pinState.startTime;
+        if (pinState.isActive && elapsedTime >= static_cast<unsigned long>(delayTime)) {
+          deactivatePWM(pinState.pin);
+          pinState.isActive = false;
+          activeCount--;
+        }
+      }
+      
+      // Activate new pins if we have less than 2 active
+      for (auto& pinState : activeStates) {
+        if (!pinState.isActive && activeCount < 2) {
+          pinState.startTime = currentTime;
+          pinState.isActive = true;
+          activatePWM(pinState.pin, analogDutyCycle, pinIndex++, totalPins);
+          activeCount++;
+        }
+      }
+      
+      // Remove completed pins
+      activeStates.erase(
+        std::remove_if(activeStates.begin(), activeStates.end(),
+          [currentTime](const PinState& pinState) {
+            return !pinState.isActive && 
+                   (currentTime - pinState.startTime >= static_cast<unsigned long>(delayTime));
+          }
+        ),
+        activeStates.end()
+      );
+    }
+    
+    // Let other tasks run
+    yield();  // On platforms that support it
+  }
+
+  Serial.println("\nCommands Completed");
+}
+
+bool isValidPin(int pin) {
+    return pin >= 0 && pin < MAX_PIN_NUMBER;
+}
+
+void activatePWM(int pin, int dutyCycle, int pinIndex, int totalPins) {
+    if (!isValidPin(pin)) return;
+    analogWrite(pin, dutyCycle);
+}
+
+void deactivatePWM(int pin) {
+    if (!isValidPin(pin)) return;
+    analogWrite(pin, 0);
 }

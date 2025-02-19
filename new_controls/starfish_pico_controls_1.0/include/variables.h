@@ -16,7 +16,9 @@ extern const int arm_d[4];
 // Control parameters
 extern const int dutyCycle;
 extern int analogDutyCycle;
+extern int singleAnalogDutyCycle;
 extern const int delayTime;
+
 
 // Command related variables
 extern String commandInput;
@@ -46,5 +48,14 @@ extern std::unordered_map<std::string, int> commandCount;
 extern std::unordered_map<std::string, int> commandDict;
 extern std::unordered_map<std::string, int> commandMap;
 
+extern int phaseShift;
+extern int staggeredDelay;
+
+struct PinState {
+  int pin;
+  unsigned long startTime;
+  bool isActive;
+};
+extern std::vector<PinState> activePins;
 
 #endif
