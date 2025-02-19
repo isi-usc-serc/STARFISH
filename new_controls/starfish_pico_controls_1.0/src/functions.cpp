@@ -44,6 +44,12 @@ void readInput(){
 
 
 void parseCommand(std::vector<String>& commandInputList) {
+  // Reset all counters and lists at the start
+  invalidCommandList.clear();
+  invalidCounter = 0;
+  blankCounter = 0;
+  dupeCounter = 0;
+  
   // Check for blank/duplicate commands first
   alternativeInvalidChecker();
   if (invalidCounter > 0) {
@@ -55,12 +61,12 @@ void parseCommand(std::vector<String>& commandInputList) {
   for (const auto& cmd : commandList) {
       commandSet.insert(std::string(cmd.c_str()));
   }
-    invalidCommandList.clear();  // Clear invalid command list
 
   for (const auto& command : commandInputList) {
     if (commandSet.find(std::string(command.c_str())) == commandSet.end()) {
       invalidCommandList.push_back(command);
-      }
+      invalidCounter++;  // Increment counter for each invalid command
+    }
   }
 
   validCondition = invalidCommandList.empty();
@@ -70,7 +76,6 @@ void parseCommand(std::vector<String>& commandInputList) {
 }
 
 void runCommand(std::vector<String>& commandInputList) {
-
   if (commandInputList.empty()) return;
 
   // Ensure the command list is not too large
@@ -89,12 +94,14 @@ void runCommand(std::vector<String>& commandInputList) {
 
   Serial.print("Executing Commands: ");
   
+  // Track valid commands for printing
+  bool firstCommand = true;
   for (const auto& command : commandInputList) {
       // Check if command exists in the dictionary
       if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
-        int pin = commandMap[std::string(command.c_str())];  // Convert to std::string
+        int pin = commandMap[std::string(command.c_str())];
 
-          // **Pin validation**
+          // Pin validation
           if (pin < 0 || pin > MAX_PIN_NUMBER) {
               Serial.print("Error: Invalid pin ");
               Serial.println(pin);
@@ -103,7 +110,13 @@ void runCommand(std::vector<String>& commandInputList) {
 
           // Execute command
           analogWrite(pin, analogDutyCycle);
-          Serial.print(command + ", ");
+          
+          // Print command with appropriate separator
+          if (!firstCommand) {
+              Serial.print(", ");
+          }
+          Serial.print(command);
+          firstCommand = false;
       }
   }
   Serial.println();
@@ -138,10 +151,7 @@ void resetVariables() {
   storedCommand = "";
   acceptedInputCounter = 0;
   validCondition = false;
-  invalidCounter = 0;
   commaCounter = 0;
-  blankCounter = 0;
-  dupeCounter = 0;
 }
 
 void splitString(String& commandInput, char delimiter, std::vector<String>& commandInputList) {
@@ -210,13 +220,13 @@ void invalidDeclaration(){ // All the serial printing for the invalid commands
 }
 
 void alternativeInvalidChecker() {
-  commandCount.clear();  // Add this line at the start of the function
+  commandCount.clear();
 
-  if (commandInputList.empty()) { // Checks for a blank command input
-      invalidCounter++;
-      blankCounter++;
+  if (commandInputList.empty()) {
+    invalidCounter++;
+    blankCounter++;
+    return;  // Exit early if empty
   }
-
 
   for (const auto& command : commandInputList) {
       commandCount[std::string(command.c_str())]++;
@@ -224,19 +234,23 @@ void alternativeInvalidChecker() {
 
   for (const auto& entry : commandCount) {
       if (entry.second > 1) {  // If command appears more than once, it's a duplicate
-        invalidCommandList.push_back(String(entry.first.c_str()));  // ✅ Convert std::string → Arduino String
+        invalidCommandList.push_back(String(entry.first.c_str()));
         dupeCounter++;  // Increment only once per duplicate command type
-          invalidCounter++;
+        invalidCounter++;
       }
   }
 }
 
 
 void invalidCommandPrinter() {
-  for (size_t i = 0; i < invalidCommandList.size(); i++) {
-      Serial.print(invalidCommandList[i]);
-      if (i < invalidCommandList.size() - 1) {
-          Serial.print(", ");
-      }
+  if (invalidCommandList.size() == 1) {
+    Serial.print(invalidCommandList[0]);
+  } else {
+    for (size_t i = 0; i < invalidCommandList.size(); i++) {
+        Serial.print(invalidCommandList[i]);
+        if (i < invalidCommandList.size() - 1) {
+            Serial.print(", ");
+        }
+    }
   }
 }
