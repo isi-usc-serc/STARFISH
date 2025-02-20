@@ -59,7 +59,7 @@ void parseCommand(std::vector<String>& commandInputList) {
 
   std::unordered_set<std::string> commandSet;
   for (const auto& cmd : commandList) {
-      commandSet.insert(std::string(cmd.c_str()));
+    commandSet.insert(std::string(cmd.c_str()));
   }
 
   for (const auto& command : commandInputList) {
@@ -71,70 +71,28 @@ void parseCommand(std::vector<String>& commandInputList) {
 
   validCondition = invalidCommandList.empty();
   if (!validCondition) {
-      invalidDeclaration();
+    invalidDeclaration();
   }
 }
 
+
 void runCommand(std::vector<String>& commandInputList) {
-  if (commandInputList.empty()) return;
-
-  // Ensure the command list is not too large
-  if (commandInputList.size() > 16) {
-      Serial.println("Error: Too many commands");
-      return;
-  }
-
-  // If there are invalid commands, do not proceed
-  if (!validCondition) return;
-
+  preCommandCheck();
+  
   // Convert command dictionary to an unordered_map for fast lookup
   for (const auto& pair : commandDict) {
     commandMap[std::string(pair.first.c_str())] = pair.second;
   }
 
-  Serial.print("Executing Commands: ");
-  
-  // Track valid commands for printing
-  bool firstCommand = true;
-  for (const auto& command : commandInputList) {
-      // Check if command exists in the dictionary
-      if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
-        int pin = commandMap[std::string(command.c_str())];
+  commandExecution();
 
-          // Pin validation
-          if (pin < 0 || pin > MAX_PIN_NUMBER) {
-              Serial.print("Error: Invalid pin ");
-              Serial.println(pin);
-              continue;
-          }
-
-          // Execute command
-          analogWrite(pin, analogDutyCycle);
-          
-          // Print command with appropriate separator
-          if (!firstCommand) {
-              Serial.print(", ");
-          }
-          Serial.print(command);
-          firstCommand = false;
-      }
-  }
-  Serial.println();
-
-  delay(delayTime);
-
-  // **Deactivate all pins safely**
-  for (const auto& cmd : commandMap) {
-      int pin = cmd.second;
-      if (pin >= 0 && pin <= MAX_PIN_NUMBER) {  // Validate before setting
-          analogWrite(pin, 0);
-      }
-  }
+  commandDeactivation();
 
   Serial.println("Commands Completed\n");
 
   resetVariables();
 }
+
 
 void resetVariables() {
   // Ensure all pins are set to zero before resetting
@@ -154,14 +112,15 @@ void resetVariables() {
   commaCounter = 0;
 }
 
+
 void splitString(String& commandInput, char delimiter, std::vector<String>& commandInputList) {
   commandInputList.clear();  // Ensure the vector is empty before adding new elements
   int temp = commandInput.length() + 1;
 
   // Add size check to prevent buffer overflow
   if (temp > 256) { // Or whatever maximum size is appropriate
-      Serial.println("Error: Input command too long");
-      return;
+    Serial.println("Error: Input command too long");
+    return;
   }
   
   // Use a vector for safe memory allocation
@@ -177,8 +136,8 @@ void splitString(String& commandInput, char delimiter, std::vector<String>& comm
   // Tokenize the input string
   char* token = strtok(input.data(), delimiterStr);
   while (token != nullptr) {
-      commandInputList.push_back(String(token));  // Use push_back to dynamically add elements
-      token = strtok(nullptr, delimiterStr);
+    commandInputList.push_back(String(token));  // Use push_back to dynamically add elements
+    token = strtok(nullptr, delimiterStr);
   }
 }
 
@@ -193,6 +152,7 @@ void initializationScript(){
   }
 }
 
+
 void invalidDeclaration(){ // All the serial printing for the invalid commands
   validCondition = false;
   if (blankCounter > 0){ // Blank command print
@@ -202,6 +162,7 @@ void invalidDeclaration(){ // All the serial printing for the invalid commands
   }
 
   else if (dupeCounter > 0){ // Duplicate command print
+
     validCondition = false;
     Serial.println("Duplicate Commands Entered");
     Serial.print("Invalid Command(s): ");
@@ -214,43 +175,117 @@ void invalidDeclaration(){ // All the serial printing for the invalid commands
     Serial.print("Invalid Command(s): ");
     invalidCommandPrinter();
   }
+
   Serial.println("\n");
   Serial.println("Please re-enter commands:\n");
   commaCounter = 0;
 }
 
+
 void alternativeInvalidChecker() {
   commandCount.clear();
 
   if (commandInputList.empty()) {
+
     invalidCounter++;
     blankCounter++;
     return;  // Exit early if empty
   }
 
   for (const auto& command : commandInputList) {
-      commandCount[std::string(command.c_str())]++;
+
+    commandCount[std::string(command.c_str())]++;
   }
 
   for (const auto& entry : commandCount) {
-      if (entry.second > 1) {  // If command appears more than once, it's a duplicate
-        invalidCommandList.push_back(String(entry.first.c_str()));
-        dupeCounter++;  // Increment only once per duplicate command type
-        invalidCounter++;
-      }
+  
+    if (entry.second > 1) {  // If command appears more than once, it's a duplicate
+
+      invalidCommandList.push_back(String(entry.first.c_str()));
+      dupeCounter++;  // Increment only once per duplicate command type
+      invalidCounter++;
+    }
   }
 }
 
 
 void invalidCommandPrinter() {
+
   if (invalidCommandList.size() == 1) {
+
     Serial.print(invalidCommandList[0]);
-  } else {
+  }
+  else {
     for (size_t i = 0; i < invalidCommandList.size(); i++) {
-        Serial.print(invalidCommandList[i]);
-        if (i < invalidCommandList.size() - 1) {
-            Serial.print(", ");
-        }
+
+      Serial.print(invalidCommandList[i]);
+      if (i < invalidCommandList.size() - 1) {
+
+        Serial.print(", ");
+      }
+    }
+  }
+}
+
+
+void preCommandCheck(){
+  if (commandInputList.empty()) return;
+
+  // Ensure the command list is not too large
+  if (commandInputList.size() > 16) {
+    Serial.println("Error: Too many commands");
+    return;
+  }
+
+  // If there are invalid commands, do not proceed
+  if (!validCondition) return;
+
+}
+
+
+void commandExecution(){
+  Serial.print("Executing Commands: ");
+  
+  // Track valid commands for printing
+  bool firstCommand = true;
+  for (const auto& command : commandInputList) {
+    // Check if command exists in the dictionary
+    if (commandMap.find(std::string(command.c_str())) != commandMap.end()) {
+      int pin = commandMap[std::string(command.c_str())];
+
+      // Pin validation
+      if (pin < 0 || pin > MAX_PIN_NUMBER) {
+        Serial.print("Error: Invalid pin ");
+        Serial.println(pin);
+        continue;
+      }
+
+      // Execute command
+      analogWrite(pin, analogDutyCycle);
+      
+      // Print command with appropriate separator
+      if (!firstCommand) {
+        Serial.print(", ");
+      }
+      Serial.print(command);
+      firstCommand = false;
+    }
+  }
+  Serial.println();
+
+  delay(delayTime);
+}
+
+
+void commandDeactivation(){
+  
+  // **Deactivate all pins safely**
+  for (const auto& cmd : commandMap) {
+
+    int pin = cmd.second;
+    if (pin >= 0 && pin <= MAX_PIN_NUMBER) {  // Validate before setting
+      
+      analogWrite(pin, 0);
     }
   }
 }

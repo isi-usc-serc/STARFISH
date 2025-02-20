@@ -18,4 +18,8 @@ void invalidCommandPrinter();
 
 String trim(const String& str);
 
+void preCommandCheck();
+void commandExecution();
+void commandDeactivation();
+
 #endif
