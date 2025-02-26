@@ -10,28 +10,47 @@ if not cap.isOpened():
     print("Error: Could not open the webcam.")
     exit()
 
-# Function to detect circular markers
-def detect_markers(frame, min_radius=9, max_radius=15):
+# Function to detect SOLID circular markers
+def detect_markers(frame, min_radius=4, max_radius=25):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Apply CLAHE for better contrast
-    clahe = cv2.createCLAHE(clipLimit=0.2, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8, 8))
     enhanced_gray = clahe.apply(gray)
 
     # Apply Median Blur to reduce noise while keeping edges
     blurred = cv2.medianBlur(enhanced_gray, 5)
 
-    # **Use Otsu's Thresholding Instead of Adaptive Thresholding**
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Canny Edge Detection
+    edges = cv2.Canny(blurred, 50, 150) # Lower and upper thresholds
 
-    # # **Invert the binary image so white circles become black**
+    # **Use Otsu's Thresholding Instead of Adaptive Thresholding**
+    _, binary = cv2.threshold(edges, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
     # binary = cv2.bitwise_not(binary)
 
-    # **Detect circles using HoughCircles**
-    circles = cv2.HoughCircles(binary, cv2.HOUGH_GRADIENT, dp=1.7, minDist=30,
-                               param1=40, param2=24, minRadius=min_radius, maxRadius=max_radius)
+    # **Find contours instead of using HoughCircles**
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    return circles, binary
+    detected_circles = []
+    for cnt in contours:
+        perimeter = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * perimeter, True)
+
+        # Compute circularity (roundness measure)
+        area = cv2.contourArea(cnt)
+        if perimeter == 0:
+            continue
+        circularity = 4 * np.pi * (area / (perimeter ** 2))  # Close to 1 for perfect circles
+
+        # Filter out non-circular and small/large objects
+        if .7 < circularity < 1.2 and area > 40:
+            (x, y), radius = cv2.minEnclosingCircle(cnt)
+            radius = int(radius)
+            if min_radius <= radius <= max_radius:
+                detected_circles.append((int(x), int(y), radius))
+
+    return detected_circles, binary
 
 # Dictionary to store multiple trackers
 trackers = {}
@@ -40,7 +59,7 @@ distance_threshold = 20  # Minimum distance to consider a new marker
 
 # Function to check if a detected marker is already tracked
 def is_duplicate_marker(new_x, new_y, existing_trackers, threshold=20):
-    for marker_id, (tracker, last_seen, center) in existing_trackers.items():
+    for marker_id, (tracker, last_seen, center) in trackers.items():
         tracked_x, tracked_y = center
         distance = np.sqrt((new_x - tracked_x) ** 2 + (new_y - tracked_y) ** 2)
         if distance < threshold:
@@ -78,9 +97,8 @@ while True:
         del trackers[marker_id]
 
     # Detect new markers if needed
-    if len(trackers) < max_markers and circles is not None:
-        circles = np.uint16(np.around(circles))
-        for i, (x, y, r) in enumerate(circles[0, :]):
+    if len(trackers) < max_markers and circles:
+        for i, (x, y, r) in enumerate(circles):
             if len(trackers) >= max_markers:
                 break  # Stop if max markers reached
 
