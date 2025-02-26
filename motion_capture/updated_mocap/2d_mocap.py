@@ -22,7 +22,7 @@ def detect_markers(frame, min_radius=4, max_radius=25):
     blurred = cv2.medianBlur(enhanced_gray, 5)
 
     # Canny Edge Detection
-    edges = cv2.Canny(blurred, 50, 150) # Lower and upper thresholds
+    edges = cv2.Canny(blurred, 70, 200) # Lower and upper thresholds
 
     # **Use Otsu's Thresholding Instead of Adaptive Thresholding**
     _, binary = cv2.threshold(edges, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
