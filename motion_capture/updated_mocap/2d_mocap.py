@@ -1,33 +1,51 @@
 import cv2
 import numpy as np
 
-# Initialize video capture
-cap = cv2.VideoCapture(1)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)  # Adjust width
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)  # Adjust height
+# Load calibration data for camera distortion and pixel-mm conversion
+calib_data = np.load("camera_calibration.npz")
+camera_matrix = calib_data["camera_matrix"]
+dist_coeffs = calib_data["dist_coeffs"]
 
-if not cap.isOpened():
-    print("Error: Could not open the webcam.")
-    exit()
+# Real-world width of reference object (checkerboard square)
+real_width_mm = 25.4 # 1 in. square
+
+# Real-world offsets from edge of image to the bracket
+v_start = 115  # vertical distance from top of image to corner of 80-20 in px
+v_adj = 137  # vertical distance from bottom of image to corner of 80-20 in px
+h_start = 173 # horizontal distance from top of image to corner of 80-20 in px
+h_adj = 155 # horizontal distance from bottom of image to corner of 80-20 in px
+
+# Dictionary to store multiple trackers
+trackers = {}
+max_markers = 8  # Max number of circles to track
+distance_threshold = 20  # Minimum distance to consider a new marker
 
 # Function to detect SOLID circular markers
 def detect_markers(frame, min_radius=4, max_radius=25):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Apply CLAHE for better contrast
-    clahe = cv2.createCLAHE(clipLimit=2, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=1, tileGridSize=(8, 8))
     enhanced_gray = clahe.apply(gray)
 
     # Apply Median Blur to reduce noise while keeping edges
     blurred = cv2.medianBlur(enhanced_gray, 5)
 
     # Canny Edge Detection
-    edges = cv2.Canny(blurred, 70, 200) # Lower and upper thresholds
+    edges = cv2.Canny(blurred, 200, 255) # Lower and upper thresholds
 
     # **Use Otsu's Thresholding Instead of Adaptive Thresholding**
     _, binary = cv2.threshold(edges, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     # binary = cv2.bitwise_not(binary)
+
+    #dilation to close gaps
+    kernel = np.ones((3,3), np.uint8)
+    kernel1 = np.ones((4,4), np.uint8)
+    kernel2 = np.ones((2,2), np.uint8)
+    binary = cv2.dilate(binary,kernel1,iterations=2)
+    binary = cv2.erode(binary,kernel2,iterations=3)
+
 
     # **Find contours instead of using HoughCircles**
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -44,18 +62,13 @@ def detect_markers(frame, min_radius=4, max_radius=25):
         circularity = 4 * np.pi * (area / (perimeter ** 2))  # Close to 1 for perfect circles
 
         # Filter out non-circular and small/large objects
-        if .7 < circularity < 1.2 and area > 40:
+        if .7 < circularity < 1.2 and area > 40: #Changed from distorted frame area > 40 to undistorted frame area > 25
             (x, y), radius = cv2.minEnclosingCircle(cnt)
             radius = int(radius)
             if min_radius <= radius <= max_radius:
                 detected_circles.append((int(x), int(y), radius))
 
     return detected_circles, binary
-
-# Dictionary to store multiple trackers
-trackers = {}
-max_markers = 8  # Max number of circles to track
-distance_threshold = 20  # Minimum distance to consider a new marker
 
 # Function to check if a detected marker is already tracked
 def is_duplicate_marker(new_x, new_y, existing_trackers, threshold=20):
@@ -66,11 +79,42 @@ def is_duplicate_marker(new_x, new_y, existing_trackers, threshold=20):
             return marker_id  # Return existing marker ID if it's a duplicate
     return None  # If not found, it's a new marker
 
+imgcount =0
+
+# Initialize video capture
+cap = cv2.VideoCapture(1)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)  # Adjust width
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)  # Adjust height
+
+if not cap.isOpened():
+    print("Error: Could not open the webcam.")
+    exit()
+
 while True:
     ret, frame = cap.read()
     if not ret:
         print("Error: Could not read frame from webcam.")
         break
+    
+
+    # Undistort the camera frame
+    frame_height, frame_width = frame.shape[:2]
+
+    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (frame_width, frame_height), 1, (frame_width, frame_height)) # Generates new camera matrix
+    uframe = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix) # Undistorts the camera
+    frame = uframe[v_start:1080-v_adj, h_start:1920-h_adj] # cropping frame to remove unecessary parts of image
+
+    if imgcount == 0:
+        imgcount += 1
+        cv2.imwrite("test_frame.jpg",frame)
+
+    # Conversion from pixels to real units
+    pixel_width = 29; # Measured pixel width of the checkerboard square. Taken using undistorted camera image and processed using ImageJ
+    pixel_to_mm = real_width_mm / pixel_width # keeping as int for simplicity
+    # real_object_width = pixel_width * scale | multiply x,y coords by scale to get real world value in mm
+    # For reference, top left corner is 0,0 px and 0,0 mm
+    # Moving right is increase in +x-direction
+    # Moving down is increase in +y-direction
 
     # Detect markers using contrast-based method
     circles, binary = detect_markers(frame)
@@ -82,8 +126,11 @@ while True:
         if success:
             x, y, w, h = [int(v) for v in box]
             new_center = (x + w // 2, y + h // 2)
+            adj_center = (int (new_center[0] * pixel_to_mm), int (new_center[1] * pixel_to_mm))  # Multiplying pixel width by conversion and converting to int
+
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Draw tracking box
-            coord_text = f"({new_center[0]}, {new_center[1]})"
+            #coord_text = f"({new_center[0]}, {new_center[1]})"
+            coord_text = f"({adj_center[0]} mm, {adj_center[1]} mm)"
             cv2.putText(frame, coord_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
                        0.5, (0, 255, 0), 1)
             trackers[marker_id] = (tracker, 0, new_center)  # Reset lost count and update center
@@ -109,7 +156,7 @@ while True:
                 continue  # Skip adding duplicate markers
 
             # Expand bounding box slightly for stability
-            frame_height, frame_width = frame.shape[:2]
+            
             x_min = max(0, x - r - 5)
             y_min = max(0, y - r - 5)
             width = min(frame_width - x_min, 2 * r + 10)
