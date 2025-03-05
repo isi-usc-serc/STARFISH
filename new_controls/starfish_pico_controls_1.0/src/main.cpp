@@ -7,11 +7,14 @@ Serial.begin(9600);
 
 delay(1000);
 pinActivate();
-initializationScript();
 
 }
 
 void loop() {
+
+  while (!Serial.available()) {
+    initializationScript();
+  }
   readInput();
   runCommand(commandInputList);
 }

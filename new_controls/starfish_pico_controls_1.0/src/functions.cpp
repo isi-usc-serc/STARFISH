@@ -27,7 +27,6 @@ void pinActivate() {
 
 void readInput(){
 
-  if (Serial.available()) {
     commandInput = Serial.readStringUntil('\n'); // Reads input string
     commandInput.trim(); // Trims out the whitespace from the input string
 
@@ -38,8 +37,6 @@ void readInput(){
 
     parseCommand(commandInputList); // Function parses the command and ensures it is valid
 
-  }
-
 }
 
 
@@ -49,24 +46,12 @@ void parseCommand(std::vector<String>& commandInputList) {
   invalidCounter = 0;
   blankCounter = 0;
   dupeCounter = 0;
-  
-  // Check for blank/duplicate commands first
+
+  // Check for blank/duplicate/invalid commands
   alternativeInvalidChecker();
   if (invalidCounter > 0) {
     invalidDeclaration();
     return;
-  }
-
-  std::unordered_set<std::string> commandSet;
-  for (const auto& cmd : commandList) {
-    commandSet.insert(std::string(cmd.c_str()));
-  }
-
-  for (const auto& command : commandInputList) {
-    if (commandSet.find(std::string(command.c_str())) == commandSet.end()) {
-      invalidCommandList.push_back(command);
-      invalidCounter++;  // Increment counter for each invalid command
-    }
   }
 
   validCondition = invalidCommandList.empty();
@@ -78,7 +63,7 @@ void parseCommand(std::vector<String>& commandInputList) {
 
 void runCommand(std::vector<String>& commandInputList) {
   preCommandCheck();
-  
+
   // Convert command dictionary to an unordered_map for fast lookup
   for (const auto& pair : commandDict) {
     commandMap[std::string(pair.first.c_str())] = pair.second;
@@ -89,8 +74,9 @@ void runCommand(std::vector<String>& commandInputList) {
   commandDeactivation();
 
   Serial.println("Commands Completed\n");
-
+  
   resetVariables();
+
 }
 
 
@@ -184,28 +170,41 @@ void invalidDeclaration(){ // All the serial printing for the invalid commands
 
 void alternativeInvalidChecker() {
   commandCount.clear();
+  invalidCommandList.clear();
+  invalidCounter = 0;
+  blankCounter = 0;
+  dupeCounter = 0;
 
   if (commandInputList.empty()) {
-
     invalidCounter++;
     blankCounter++;
     return;  // Exit early if empty
   }
 
-  for (const auto& command : commandInputList) {
+  std::unordered_set<std::string> commandSet;
+  for (const auto& cmd : commandList) {
+    commandSet.insert(std::string(cmd.c_str()));
+  }
 
-    commandCount[std::string(command.c_str())]++;
+  for (const auto& command : commandInputList) {
+    std::string commandStr = std::string(command.c_str());
+    commandCount[commandStr]++;
+    if (commandSet.find(commandStr) == commandSet.end()) {
+      invalidCommandList.push_back(command);
+      invalidCounter++;
+    }
   }
 
   for (const auto& entry : commandCount) {
-  
     if (entry.second > 1) {  // If command appears more than once, it's a duplicate
-
       invalidCommandList.push_back(String(entry.first.c_str()));
       dupeCounter++;  // Increment only once per duplicate command type
       invalidCounter++;
     }
   }
+  // Serial.println(blankCounter);
+  // Serial.println(dupeCounter);
+  // Serial.println(invalidCounter);
 }
 
 
@@ -229,16 +228,25 @@ void invalidCommandPrinter() {
 
 
 void preCommandCheck(){
-  if (commandInputList.empty()) return;
-
-  // Ensure the command list is not too large
-  if (commandInputList.size() > 16) {
-    Serial.println("Error: Too many commands");
+  
+  // If there are invalid commands, do not proceed
+  if (!validCondition){
+    Serial.println("Error: Invalid command(s) detected");
     return;
   }
 
-  // If there are invalid commands, do not proceed
-  if (!validCondition) return;
+  if (commandInputList.empty()){
+    validCondition = false;
+    Serial.println("Error: No commands entered");
+    return;
+    }
+
+  // Ensure the command list is not too large
+  if (commandInputList.size() > 16) {
+    validCondition = false;
+    Serial.println("Error: Too many commands");
+    return;
+  }
 
 }
 
