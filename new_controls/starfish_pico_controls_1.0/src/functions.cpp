@@ -26,7 +26,7 @@ void pinActivate() {
 
 
 void readInput(){
-
+  if (Serial.available()) {
     commandInput = Serial.readStringUntil('\n'); // Reads input string
     commandInput.trim(); // Trims out the whitespace from the input string
 
@@ -36,7 +36,7 @@ void readInput(){
     splitString(commandInput, delimiter, commandInputList); // Splits the input string into an array
 
     parseCommand(commandInputList); // Function parses the command and ensures it is valid
-
+  }
 }
 
 
@@ -53,6 +53,18 @@ void parseCommand(std::vector<String>& commandInputList) {
     invalidDeclaration();
     return;
   }
+  
+  std::unordered_set<std::string> commandSet;
+  for (const auto& cmd : commandList) {
+      commandSet.insert(std::string(cmd.c_str()));
+  }
+
+  for (const auto& command : commandInputList) {
+    if (commandSet.find(std::string(command.c_str())) == commandSet.end()) {
+      invalidCommandList.push_back(command);
+      invalidCounter++;  // Increment counter for each invalid command
+    }
+  }
 
   validCondition = invalidCommandList.empty();
   if (!validCondition) {
@@ -62,7 +74,12 @@ void parseCommand(std::vector<String>& commandInputList) {
 
 
 void runCommand(std::vector<String>& commandInputList) {
-  preCommandCheck();
+  // preCommandCheck();
+  
+  // If there are invalid commands, do not proceed
+  if (!validCondition){
+    return;
+  }
 
   // Convert command dictionary to an unordered_map for fast lookup
   for (const auto& pair : commandDict) {
@@ -72,7 +89,7 @@ void runCommand(std::vector<String>& commandInputList) {
   commandExecution();
 
   commandDeactivation();
-
+  
   Serial.println("Commands Completed\n");
   
   resetVariables();
