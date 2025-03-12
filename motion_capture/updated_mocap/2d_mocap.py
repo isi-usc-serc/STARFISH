@@ -1,5 +1,27 @@
 import cv2
 import numpy as np
+import csv
+import time
+from datetime import datetime
+import os
+
+# Dictionary to store multiple trackers
+trackers = {}
+max_markers = 8  # Max number of circles to track
+distance_threshold = 20  # Minimum distance to consider a new marker
+
+# Ensure data_output directory exists
+os.makedirs('data_output', exist_ok=True)
+
+# Create CSV file with headers
+csv_filename = os.path.join('data_output', f"marker_positions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+csv_file = open(csv_filename, 'w', newline='')
+csv_writer = csv.writer(csv_file)
+# Write headers - Time + columns for each marker's x,y coordinates
+headers = ['Timestamp']
+for i in range(max_markers):
+    headers.extend([f'Marker_{i}_X_mm', f'Marker_{i}_Y_mm'])
+csv_writer.writerow(headers)
 
 # Load calibration data for camera distortion and pixel-mm conversion
 calib_data = np.load("camera_calibration.npz")
@@ -10,18 +32,13 @@ dist_coeffs = calib_data["dist_coeffs"]
 real_width_mm = 25.4 # 1 in. square
 
 # Real-world offsets from edge of image to the bracket
-v_start = 115  # vertical distance from top of image to corner of 80-20 in px
-v_adj = 137  # vertical distance from bottom of image to corner of 80-20 in px
-h_start = 173 # horizontal distance from top of image to corner of 80-20 in px
-h_adj = 155 # horizontal distance from bottom of image to corner of 80-20 in px
-
-# Dictionary to store multiple trackers
-trackers = {}
-max_markers = 8  # Max number of circles to track
-distance_threshold = 20  # Minimum distance to consider a new marker
+v_start = 115+60  # vertical distance from top of image to corner of 80-20 in px
+v_adj = 137+30  # vertical distance from bottom of image to corner of 80-20 in px
+h_start = 173+30 # horizontal distance from top of image to corner of 80-20 in px
+h_adj = 155+30 # horizontal distance from bottom of image to corner of 80-20 in px
 
 # Function to detect SOLID circular markers
-def detect_markers(frame, min_radius=4, max_radius=25):
+def detect_markers(frame, min_radius=5, max_radius=25):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Apply CLAHE for better contrast
@@ -43,8 +60,13 @@ def detect_markers(frame, min_radius=4, max_radius=25):
     kernel = np.ones((3,3), np.uint8)
     kernel1 = np.ones((4,4), np.uint8)
     kernel2 = np.ones((2,2), np.uint8)
-    binary = cv2.dilate(binary,kernel1,iterations=2)
-    binary = cv2.erode(binary,kernel2,iterations=3)
+    binary = cv2.dilate(binary,kernel1,iterations=2) # DEFAULT: 2
+    binary = cv2.erode(binary,kernel2,iterations=3) # DEFAULT: 3
+    # binary = cv2.dilate(binary,kernel1,iterations=1) # Not in original
+    # binary = cv2.erode(binary,kernel2,iterations=4) # Not in original
+    # binary = cv2.dilate(binary,kernel1,iterations=1) # Not in original
+    # binary = cv2.erode(binary,kernel2,iterations=1) # Not in original
+
 
 
     # **Find contours instead of using HoughCircles**
@@ -62,7 +84,7 @@ def detect_markers(frame, min_radius=4, max_radius=25):
         circularity = 4 * np.pi * (area / (perimeter ** 2))  # Close to 1 for perfect circles
 
         # Filter out non-circular and small/large objects
-        if .7 < circularity < 1.2 and area > 40: #Changed from distorted frame area > 40 to undistorted frame area > 25
+        if .7 < circularity < 1.2 and area > 40:  # Reverted to original values
             (x, y), radius = cv2.minEnclosingCircle(cnt)
             radius = int(radius)
             if min_radius <= radius <= max_radius:
@@ -121,15 +143,23 @@ while True:
 
     # Update existing trackers
     to_remove = []  # List of lost trackers
+    
+    # Prepare row data for CSV
+    csv_row = [datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')]
+    marker_positions = {i: None for i in range(max_markers)}  # Initialize all positions as None
+    
     for marker_id, (tracker, last_seen, center) in trackers.items():
         success, box = tracker.update(frame)
         if success:
             x, y, w, h = [int(v) for v in box]
             new_center = (x + w // 2, y + h // 2)
-            adj_center = (int (new_center[0] * pixel_to_mm), int (new_center[1] * pixel_to_mm))  # Multiplying pixel width by conversion and converting to int
-
+            adj_center = (int(new_center[0] * pixel_to_mm), int(new_center[1] * pixel_to_mm))
+            
+            # Store position for CSV
+            marker_num = int(marker_id.split('_')[1])  # Extract marker number from ID
+            marker_positions[marker_num] = adj_center
+            
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Draw tracking box
-            #coord_text = f"({new_center[0]}, {new_center[1]})"
             coord_text = f"({adj_center[0]} mm, {adj_center[1]} mm)"
             cv2.putText(frame, coord_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
                        0.5, (0, 255, 0), 1)
@@ -138,7 +168,15 @@ while True:
             trackers[marker_id] = (tracker, last_seen + 1, center)
             if last_seen > 10:  # Allow buffer before removal
                 to_remove.append(marker_id)
-
+    
+    # Write positions to CSV
+    for i in range(max_markers):
+        if marker_positions[i] is not None:
+            csv_row.extend([marker_positions[i][0], marker_positions[i][1]])
+        else:
+            csv_row.extend(['', ''])  # Empty values for missing markers
+    csv_writer.writerow(csv_row)
+    
     # Remove lost trackers
     for marker_id in to_remove:
         del trackers[marker_id]
@@ -179,11 +217,13 @@ while True:
                        0.5, (255, 0, 0), 1)
 
     # Debugging visualizations
-    cv2.imshow('Multi-Marker Tracking', frame)
     cv2.imshow('Binary Mask', binary)  # **Should now clearly separate markers from background**
+    cv2.imshow('Multi-Marker Tracking', frame)
 
     if cv2.waitKey(10) & 0xFF == ord('q'):  # Adjusted wait time for better tracking
         break
 
 cap.release()
 cv2.destroyAllWindows()
+csv_file.close()  # Close the CSV file
+print(f"Marker positions have been saved to {csv_filename}")
