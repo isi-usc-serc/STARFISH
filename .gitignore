@@ -15,5 +15,5 @@ uninstall.sh
 version_history.txt
 examples/c/
 .DS_Store
-**.code-workspace
-.vscode/*
+**/.code-workspace
+**/.vscode/*
