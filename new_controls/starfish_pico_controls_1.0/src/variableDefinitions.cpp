@@ -15,7 +15,7 @@ constexpr int arm_c[4] = {8, 9, 10, 11}; // pins numbers for arm c
 constexpr int arm_d[4] = {12, 13, 14, 15}; // pins numbers for arm d
 
 // Control parameters
-const int dutyCycle = 50; // desired duty cycle (as a percent)
+const int dutyCycle = 100; // desired duty cycle (as a percent)
 const int delayTime = 10000; // desired actuation time
 int analogDutyCycle = (dutyCycle > 0 && dutyCycle <= 100) ? 
                      static_cast<int>((dutyCycle / 100.0) * 255) : 0;
