@@ -10,12 +10,18 @@ program.
 
 #!/usr/bin/env python3
 
+# === Import libraries ===
 import socket
 import json
 import time
 import datetime
 import RPi.GPIO as GPIO
 from daqhats import mcc134, HatIDs, HatError, TcTypes
+
+# Specify dependency path for daqhats
+import sys
+sys.path.append('/home/Leapfrog/STARFISH/Thermal/daqhats_stuff/examples/python/mcc134')
+
 from daqhats_utils import select_hat_device
 
 ################################ CONFIGURATION ################################

@@ -11,7 +11,7 @@ Created on Wed Jun 11 17:33:49 2025
 
 """
 
-# Import libraries
+# === Import libraries ===
 import cv2
 import csv
 import os
@@ -27,7 +27,7 @@ LOG_DIR = r"C:\Users\space_lab\Desktop\STARFISH Test Data\Thermo_Position_Data"
 FRAME_DIR = os.path.join(LOG_DIR, "frames")
 
 CSV_PATH = os.path.join(LOG_DIR, "data_log.csv")
-LISTEN_IP = "192.168.0.112"
+LISTEN_IP = "0.0.0.0"  # listens on all its network interfaces (Pi Address: 192.168.0.112)
 LISTEN_PORT = 5005
 
 CAMERA_IDS = [0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
