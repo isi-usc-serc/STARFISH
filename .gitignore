@@ -15,5 +15,12 @@ uninstall.sh
 version_history.txt
 examples/c/
 .DS_Store
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
 **/.code-workspace
 **/.vscode/*
