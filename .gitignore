@@ -15,6 +15,7 @@ uninstall.sh
 version_history.txt
 examples/c/
 .DS_Store
+venv/
 .venv/
 __pycache__/
 *.pyc
