@@ -20,7 +20,7 @@ from daqhats import mcc134, HatIDs, HatError, TcTypes
 
 # Specify dependency path for daqhats
 import sys
-sys.path.append('/home/starfish2/STARFISH/STARFISH/Thermal/daqhats_custom_stuff/examples/python/mcc134')
+sys.path.append('/home/starfish2/STARFISH/Thermal/daqhats_custom_stuff/examples/python/mcc134')
 
 from daqhats_utils import select_hat_device
 
