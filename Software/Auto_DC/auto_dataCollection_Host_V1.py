@@ -37,9 +37,17 @@ CAMERA_IDS = [0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 # Alignment tolerance in milliseconds
 ALIGNMENT_WINDOW_MS = 50
 
-# Set number of samples to collect, and the interval between pulses
+# Thermocouple configuration for the Pi
+TC_CHANNELS = [0, 1, 2, 3]
+TC_TYPE = "J"  # Thermocouple type: J, K, etc.
+PULSE_DURATION = 1.0     # seconds
+SEND_INTERVAL = 0.25     # seconds between temperature samples
+
+# Set number of samples to collect, and interval between pulses
 NUM_RUNS = 5
 INTER_RUN_DELAY = 20  # Interval time between pulses in seconds
+
+
 
 
 #################################### SETUP ####################################
@@ -64,6 +72,17 @@ server.listen(1)
 print(f"[INFO] Listening for Raspberry Pi on {LISTEN_IP}:{LISTEN_PORT}")
 conn, addr = server.accept()
 print(f"[INFO] Connected to Raspberry Pi at {addr}")
+
+# Send configuration to Pi
+config_packet = {
+    "pulse_duration": PULSE_DURATION,
+    "send_interval": SEND_INTERVAL,
+    "channels": TC_CHANNELS,
+    "tc_type": TC_TYPE
+}
+conn.sendall(json.dumps(config_packet).encode())
+
+
 
 
 ############################# CAMERA PROCESSING ###############################
