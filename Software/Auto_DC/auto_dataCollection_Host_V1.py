@@ -19,6 +19,7 @@ import socket
 import json
 import time
 from datetime import datetime, timedelta
+from dateutil import parser
 from collections import deque
 
 
@@ -128,7 +129,8 @@ def recv_temp_packet():
         timestamp = pkt["timestamp"]
         temps = pkt.get("temperatures_C", {})
         temps["sma_active"] = pkt.get("sma_active", "")
-        return datetime.fromisoformat(timestamp), temps
+        ts = parser.isoparse(timestamp).replace(tzinfo=None)
+        return ts, temps
     except Exception as e:
         print(f"[ERROR] Failed to decode packet: {e}")
         return None, None
