@@ -90,6 +90,8 @@ conn.sendall(json.dumps(config_packet).encode())
 def detect_position(frame):
     """Basic red ball detection to extract (x, y) or z position."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+   
+    # Configure color detection upper and lower bounds
     lower_red = (0, 100, 100)
     upper_red = (10, 255, 255)
     mask = cv2.inRange(hsv, lower_red, upper_red)
@@ -160,7 +162,7 @@ def run_data_collection(run_index):
 
             # 2. Get camera-based position data
             ts_pos_str, x, y, z = capture_position()
-            ts_pos = datetime.fromisoformat(ts_pos_str)
+            ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
             position_buffer.append((ts_pos, x, y, z))
 
             # 3. Match closest TC data to position timestamp
