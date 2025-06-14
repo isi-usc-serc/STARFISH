@@ -76,7 +76,7 @@ server.bind((LISTEN_IP, LISTEN_PORT))
 server.listen(1)
 print(f"[INFO] Listening for Raspberry Pi on {LISTEN_IP}:{LISTEN_PORT}")
 conn, addr = server.accept()
-print(f"[INFO] Connected to Raspberry Pi at {addr}")
+print(f"[INFO] Connected to Raspberry Pi at {addr}", flush=True)
 
 # Send configuration to Pi
 config_packet = {
@@ -86,8 +86,6 @@ config_packet = {
     "tc_type": TC_TYPE
 }
 conn.sendall(json.dumps(config_packet).encode())
-
-
 
 
 ############################# CAMERA PROCESSING ###############################
@@ -130,8 +128,8 @@ def capture_position():
 def recv_temp_packet():
     """Receive and decode thermocouple data."""
     try:
-        data = conn.recv(1024).decode()
-        pkt = json.loads(data)
+        raw = conn.makefile().readline()
+        pkt = json.loads(raw)
         timestamp = pkt["timestamp"]
         temps = pkt.get("temperatures_C", {})
         temps["sma_active"] = pkt.get("sma_active", "")
@@ -140,7 +138,6 @@ def recv_temp_packet():
     except Exception as e:
         print(f"[ERROR] Failed to decode packet: {e}")
         return None, None
-
 
 ################################ DATA COLLECTION ##############################
 def run_data_collection(run_index):
@@ -182,6 +179,7 @@ def run_data_collection(run_index):
 
                 delta, match_time, match_temps = closest_pair
                 if delta <= tolerance:
+                    
                     # Match found; write to CSV
                     ch = [match_temps.get(f"ch{i}", "") for i in range(4)]
                     sma_state = match_temps.get("sma_active", "")

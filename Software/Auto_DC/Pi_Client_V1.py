@@ -100,7 +100,8 @@ def run_data_collection():
             }
 
             try:
-                client.sendall(json.dumps(packet).encode())
+                print("[DEBUG] Sending packet...")
+                client.sendall((json.dumps(packet) + '\n').encode())
                 print(f"[INFO] Sent: {packet}")
             except:
                 print("[ERROR] Failed to send packet to host.")
@@ -111,7 +112,6 @@ def run_data_collection():
         # Optional: stop sending after SMA pulse ends + some buffer time
         if not sma_active and (now - pulse_start_time > SMA_PULSE_DURATION + 2.0):
             break
-
 
 try:
     print("[INFO] Waiting for 'start dc' commands from host...")
