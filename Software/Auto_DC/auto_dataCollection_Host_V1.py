@@ -159,6 +159,7 @@ def run_data_collection(run_index):
     start_time = time.time()
     try:
         while True:
+            check_for_manual_exit()
             # 1. Receive thermocouple packet
             ts_thermo, temps = recv_temp_packet()
             if ts_thermo and temps:
@@ -205,22 +206,22 @@ def run_data_collection(run_index):
 
 
 ################################# MAIN LOOP ###################################
-# Kill Switch: "q + enter"
-def monitor_keyboard():
-    while True:
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            key = sys.stdin.readline().strip()
-            if key.lower() == 'q':
-                print("[STOP] Manual stop triggered. Exiting.")
-                os._exit(0)  # Hard exit; avoids hanging threads
+# Kill Switch, enter this command in console: open("stop.txt", "w").close()
+def check_for_manual_exit():
+    try:
+        if os.path.exists("stop.txt"):
+            print("[STOP] Detected stop file. Exiting.")
+            os._exit(0)
+    except:
+        pass
 
-keyboard_thread = threading.Thread(target=monitor_keyboard, daemon=True)
-keyboard_thread.start()
+
 # Wait for input before starting data collection
 input("[READY] Press Enter to begin data collection...")
 
 try:
     for run_index in range(NUM_RUNS):
+        check_for_manual_exit()
         print(f"[INFO] Sending 'start dc' command for run {run_index + 1}")
         conn.sendall(b"start dc")
         run_data_collection(run_index)
@@ -231,6 +232,7 @@ try:
                 f"seconds before next run...\n"
             )
             time.sleep(INTER_RUN_DELAY)
+            check_for_manual_exit()
 
 
 finally:
