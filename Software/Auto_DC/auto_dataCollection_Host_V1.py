@@ -17,23 +17,29 @@ import csv
 import os
 import socket
 import json
+import time
 from datetime import datetime, timedelta
 from collections import deque
 
 
 ################################## CONFIGURATION ##############################
-
+# Set data logging directory
 LOG_DIR = r"C:\Users\space_lab\Desktop\STARFISH Test Data\Thermo_Position_Data"
 FRAME_DIR = os.path.join(LOG_DIR, "frames")
 
-CSV_PATH = os.path.join(LOG_DIR, "data_log.csv")
-LISTEN_IP = "0.0.0.0"  # listens on all its network interfaces (Pi Address: 192.168.0.112)
+# Set port and IP info (currently listening for any connecting ip)
+LISTEN_IP = "0.0.0.0"  # listens on all its network interfaces
 LISTEN_PORT = 5005
 
+# Define camera IDs in use
 CAMERA_IDS = [0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
 ALIGNMENT_WINDOW_MS = 50
+
+# Set number of samples to collect, and the interval between pulses
+NUM_RUNS = 5
+INTER_RUN_DELAY = 20  # Interval time between pulses in seconds
 
 
 #################################### SETUP ####################################
@@ -49,9 +55,8 @@ for cam_id in CAMERA_IDS:
         print(f"[ERROR] Camera {cam_id} failed to open")
     cams.append(cam)
 
-with open(CSV_PATH, mode='w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(["time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4"])
+def get_csv_path(run_index):
+    return os.path.join(LOG_DIR, f"data_log_run_{run_index + 1}.csv")
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind((LISTEN_IP, LISTEN_PORT))
@@ -102,54 +107,88 @@ def recv_temp_packet():
         pkt = json.loads(data)
         timestamp = pkt["timestamp"]
         temps = pkt.get("temperatures_C", {})
+        temps["sma_active"] = pkt.get("sma_active", "")
         return datetime.fromisoformat(timestamp), temps
     except Exception as e:
         print(f"[ERROR] Failed to decode packet: {e}")
         return None, None
 
 
-################################ DATA BUFFERS #################################
-thermo_buffer = deque()
-position_buffer = deque()
-tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
+################################ DATA COLLECTION ##############################
+def run_data_collection(run_index):
+    thermo_buffer = deque()
+    position_buffer = deque()
+    tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
+
+    csv_path = get_csv_path(run_index)
+    with open(csv_path, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4",
+                         "sma_active"])
+
+    print(f"[INFO] Beginning data collection for run {run_index + 1}")
+
+    start_time = time.time()
+    try:
+        while True:
+            # 1. Receive thermocouple packet
+            ts_thermo, temps = recv_temp_packet()
+            if ts_thermo and temps:
+                thermo_buffer.append((ts_thermo, temps))
+
+            # 2. Get camera-based position data
+            ts_pos_str, x, y, z = capture_position()
+            ts_pos = datetime.fromisoformat(ts_pos_str)
+            position_buffer.append((ts_pos, x, y, z))
+
+            # 3. Match closest TC data to position timestamp
+            while thermo_buffer and position_buffer:
+                ts_p, x_p, y_p, z_p = position_buffer[0]
+                closest_pair = min(
+                    [(abs(ts_p - ts_t), ts_t, temps_t) for ts_t, temps_t in 
+                     thermo_buffer],
+                    key=lambda t: t[0],
+                    default=(None, None, None)
+                )
+
+                delta, match_time, match_temps = closest_pair
+                if delta <= tolerance:
+                    # Match found; write to CSV
+                    ch = [match_temps.get(f"ch{i}", "") for i in range(4)]
+                    sma_state = match_temps.get("sma_active", "")
+                    with open(csv_path, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([ts_p.isoformat(), x_p, y_p, z_p] 
+                                        + ch + [sma_state])
+
+                    position_buffer.popleft()
+                    thermo_buffer = deque((ts, t) for ts, t in thermo_buffer
+                                          if ts != match_time)
+                else:
+                    break
+
+            # Stop after INTER_RUN_DELAY seconds to move to next pulse
+            if time.time() - start_time > INTER_RUN_DELAY:
+                print(f"[INFO] Run {run_index + 1} completed.")
+                break
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Data collection interrupted.")
 
 
 ################################# MAIN LOOP ###################################
 try:
-    while True:
-        # 1. Receive thermocouple packet
-        ts_thermo, temps = recv_temp_packet()
-        if ts_thermo and temps:
-            thermo_buffer.append((ts_thermo, temps))
+    for run_index in range(NUM_RUNS):
+        print(f"[INFO] Sending 'start dc' command for run {run_index + 1}")
+        conn.sendall(b"start dc")
+        run_data_collection(run_index)
 
-        # 2. Get camera-based position data
-        ts_pos_str, x, y, z = capture_position()
-        ts_pos = datetime.fromisoformat(ts_pos_str)
-        position_buffer.append((ts_pos, x, y, z))
-
-        # 3. Match closest TC data to position timestamp
-        while thermo_buffer and position_buffer:
-            ts_p, x_p, y_p, z_p = position_buffer[0]
-            closest_pair = min(
-                [(abs(ts_p - ts_t), ts_t, temps_t) for ts_t, temps_t in 
-                 thermo_buffer],
-                key=lambda t: t[0],
-                default=(None, None, None)
-            )
-
-            delta, match_time, match_temps = closest_pair
-            if delta <= tolerance:
-                # Match found; write to CSV
-                ch = [match_temps.get(f"ch{i}", "") for i in range(4)]
-                with open(CSV_PATH, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([ts_p.isoformat(), x_p, y_p, z_p] + ch)
-
-                position_buffer.popleft()
-                thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts
-                                      != match_time)
-            else:
-                break
+        if run_index < NUM_RUNS - 1:
+            print(
+                f"[INFO] Waiting {INTER_RUN_DELAY} "
+                f"seconds before next run...\n"
+                )
+            time.sleep(INTER_RUN_DELAY)
 
 finally:
     for cam in cams:

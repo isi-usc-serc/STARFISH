@@ -63,16 +63,9 @@ TC_TYPE = getattr(TcTypes, f"TYPE_{config.get('tc_type', 'J')}")
 for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
 
-# Wait for "start dc" command
-while True:
-    msg = client.recv(1024).decode().strip()
-    if msg.lower() == "start dc":
-        print("[INFO] Starting data collection loop")
-        break
+################################## LOOP #######################################
 
-################################## MAIN LOOP ##################################
-
-try:
+def run_data_collection():
     sma_active = True
     pulse_start_time = time.time()
     last_sample_time = 0
@@ -105,10 +98,27 @@ try:
                 "sma_active": sma_active
             }
 
-            client.sendall(json.dumps(packet).encode())
-            print(f"[INFO] Sent: {packet}")
+            try:
+                client.sendall(json.dumps(packet).encode())
+                print(f"[INFO] Sent: {packet}")
+            except:
+                print("[ERROR] Failed to send packet to host.")
+                break  # break if connection drops
 
         time.sleep(0.01)  # Prevent maxing out CPU
+
+        # Optional: stop sending after SMA pulse ends + some buffer time
+        if not sma_active and (now - pulse_start_time > SMA_PULSE_DURATION + 2.0):
+            break
+
+
+try:
+    print("[INFO] Waiting for 'start dc' commands from host...")
+    while True:
+        msg = client.recv(1024).decode().strip()
+        if msg.lower() == "start dc":
+            print("[INFO] Starting new data collection run...")
+            run_data_collection()
 
 except KeyboardInterrupt:
     print("\n[INFO] Stopping script.")
