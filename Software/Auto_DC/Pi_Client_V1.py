@@ -32,6 +32,7 @@ SMA_GPIO_PIN = 18
 
 ################################## SETUP ######################################
 # GPIO Setup
+GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SMA_GPIO_PIN, GPIO.OUT)
 GPIO.output(SMA_GPIO_PIN, GPIO.LOW)

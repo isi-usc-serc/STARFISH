@@ -115,7 +115,8 @@ def capture_position():
             z_positions.append(y if y is not None else None)
     z_avg = round(sum(z for z in z_positions if z is not None) / max(len([z 
             for z in z_positions if z is not None]), 1), 2)
-    return datetime.utcnow().isoformat(), top_x, top_y, z_avg
+    from datetime import timezone
+    return datetime.now(timezone.utc).isoformat(), top_x, top_y, z_avg
 
 
 ############################# DATA IMPORT FROM Pi #############################
@@ -196,6 +197,9 @@ def run_data_collection(run_index):
 
 
 ################################# MAIN LOOP ###################################
+# Wait for input before starting data collection
+input("[READY] Press Enter to begin data collection...")
+
 try:
     for run_index in range(NUM_RUNS):
         print(f"[INFO] Sending 'start dc' command for run {run_index + 1}")
@@ -206,8 +210,9 @@ try:
             print(
                 f"[INFO] Waiting {INTER_RUN_DELAY} "
                 f"seconds before next run...\n"
-                )
+            )
             time.sleep(INTER_RUN_DELAY)
+
 
 finally:
     for cam in cams:
