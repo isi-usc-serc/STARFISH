@@ -21,6 +21,9 @@ import time
 from datetime import datetime, timedelta
 from dateutil import parser
 from collections import deque
+import threading
+import sys
+import select
 
 
 ################################## CONFIGURATION ##############################
@@ -33,7 +36,7 @@ LISTEN_IP = "0.0.0.0"  # listens on all its network interfaces
 LISTEN_PORT = 5005
 
 # Define camera IDs in use
-CAMERA_IDS = [0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
+CAMERA_IDS = [0] #, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
 ALIGNMENT_WINDOW_MS = 50
@@ -201,6 +204,17 @@ def run_data_collection(run_index):
 
 
 ################################# MAIN LOOP ###################################
+# Kill Switch: "q + enter"
+def monitor_keyboard():
+    while True:
+        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            key = sys.stdin.readline().strip()
+            if key.lower() == 'q':
+                print("[STOP] Manual stop triggered. Exiting.")
+                os._exit(0)  # Hard exit; avoids hanging threads
+
+keyboard_thread = threading.Thread(target=monitor_keyboard, daemon=True)
+keyboard_thread.start()
 # Wait for input before starting data collection
 input("[READY] Press Enter to begin data collection...")
 
