@@ -71,6 +71,7 @@ def get_csv_path(run_index):
     return os.path.join(LOG_DIR, f"data_log_run_{run_index + 1}.csv")
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind((LISTEN_IP, LISTEN_PORT))
 server.listen(1)
 print(f"[INFO] Listening for Raspberry Pi on {LISTEN_IP}:{LISTEN_PORT}")
