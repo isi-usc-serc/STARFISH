@@ -27,7 +27,7 @@ def main():
     """
     This function is executed automatically when the module is run directly.
     """
-    tc_type = TcTypes.TYPE_J   # change this to the desired thermocouple type
+    tc_type = TcTypes.TYPE_K   # change this to the desired thermocouple type
     delay_between_reads = 1  # Seconds
     channels = (0, 1, 2, 3)
 
