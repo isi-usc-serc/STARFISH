@@ -65,7 +65,6 @@ for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
 
 ################################## LOOP #######################################
-
 def run_data_collection():
     sma_active = True
     pulse_start_time = time.time()
