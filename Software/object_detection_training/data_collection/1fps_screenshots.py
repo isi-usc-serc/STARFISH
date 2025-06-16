@@ -3,7 +3,7 @@ import time
 import os
 
 # Parameters
-output_dir = "captured_frames\set3"
+output_dir = "captured_frames/set3"
 fps = 1  # capture rate in Hz
 delay = 1.0 / fps
 
@@ -11,7 +11,10 @@ delay = 1.0 / fps
 os.makedirs(output_dir, exist_ok=True)
 
 # Initialize camera
-cap = cv2.VideoCapture(2)
+cap = cv2.VideoCapture(1)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
 if not cap.isOpened():
     print("Error: Cannot open camera.")
     exit()
@@ -33,7 +36,7 @@ try:
         current_time = time.time()
         if current_time - last_capture_time >= delay:
             filename = os.path.join(output_dir, f"frame_{frame_count:04d}.jpg")
-            cv2.imwrite(filename, frame)
+            cv2.imwrite(filename, frame, [cv2.IMWRITE_JPEG_QUALITY, 100])
             print(f"Saved {filename}")
             frame_count += 1
             last_capture_time = current_time
