@@ -1,0 +1,8 @@
+# data.yaml
+
+path: ./dataset  # path to dataset folder
+train: images/train
+val: images/val
+
+nc: 1
+names: ["white_ball"]
