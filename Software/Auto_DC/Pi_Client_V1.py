@@ -1,12 +1,12 @@
-""" 
-(Pi) Client program: Thermocouple Data Collection & SMA Control
+# """ 
+# (Pi) Client program: Thermocouple Data Collection & SMA Control
 
-This script will import configuration settings from the control program (PC), 
-listen for startup commands, control the thermocouple data collection 
-and SMA power pulse, and send the data along with timestamp info for the Host 
-program.
+# This script will import configuration settings from the control program (PC), 
+# listen for startup commands, control the thermocouple data collection 
+# and SMA power pulse, and send the data along with timestamp info for the Host 
+# program.
 
-"""
+# """
 
 #!/usr/bin/env python3
 
@@ -25,7 +25,7 @@ sys.path.append('/home/starfish2/STARFISH/Thermal/daqhats_custom_stuff/examples/
 from daqhats_utils import select_hat_device
 
 ################################ CONFIGURATION ################################
-PC_IP = '192.168.0.106'  # Update with current Host PC's IP address
+PC_IP = '192.168.0.102'  # Update with current Host PC's IP address
 PC_PORT = 5005
 
 SMA_GPIO_PIN = 18

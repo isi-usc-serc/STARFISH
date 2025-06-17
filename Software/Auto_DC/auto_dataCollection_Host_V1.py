@@ -13,6 +13,8 @@
 #  > cd "C:\Users\Owner\Desktop\SERC\STARFISH Project\Software\STARFISH"
 #  > & "venv\Scripts\Activate.ps1"    (in VScode terminal)
 
+# Pi's current ip address: 
+
 # """
 
 # === Import libraries ===
@@ -36,11 +38,11 @@ LOG_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Therm
 FRAME_DIR = os.path.join(LOG_DIR, "frames")
 
 # Set port and IP info (currently listening for any connecting ip)
-LISTEN_IP = "0.0.0.0"  # listens on all its network interfaces
+LISTEN_IP = "0.0.0.0"  # listens for anything trying to connect
 LISTEN_PORT = 5005
 
 # Define camera IDs in use
-CAMERA_IDS = [0] #, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
+CAMERA_IDS = [1] #, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
 ALIGNMENT_WINDOW_MS = 50
@@ -49,7 +51,7 @@ ALIGNMENT_WINDOW_MS = 50
 TC_CHANNELS = [0, 1, 2, 3]
 TC_TYPE = "J"  # Thermocouple type: J, K, etc.
 PULSE_DURATION = 1.0     # seconds
-SEND_INTERVAL = 0.25     # seconds between temperature samples
+SEND_INTERVAL  = 1.0     # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 5
@@ -221,6 +223,18 @@ def run_data_collection(run_index):
                 else:
                     break
 
+            # --- Buffer clearing for stale unmatched data ---
+            # If the head of position_buffer is too old to ever match, drop it
+            if position_buffer and thermo_buffer:
+                ts_p, *_ = position_buffer[0]
+                ts_t, _ = thermo_buffer[0]
+                if ts_p < ts_t - tolerance:
+                    print(f"[WARN] Dropping stale position data: {ts_p.isoformat()} (older than first thermo: {ts_t.isoformat()})")
+                    position_buffer.popleft()
+                elif ts_t < ts_p - tolerance:
+                    print(f"[WARN] Dropping stale thermo data: {ts_t.isoformat()} (older than first position: {ts_p.isoformat()})")
+                    thermo_buffer.popleft()
+
             # Stop after INTER_RUN_DELAY seconds to move to next pulse
             if time.time() - start_time > INTER_RUN_DELAY:
                 print(f"[INFO] Run {run_index + 1} completed.")
@@ -268,3 +282,14 @@ finally:
     cv2.destroyAllWindows()
     conn.close()
     server.close()
+
+def calibrate_camera():
+    """
+    TODO: Implement camera calibration to convert pixel coordinates to real-world units (pixels/mm).
+    Steps may include:
+      1. Capture an image with a ruler or known reference object.
+      2. Measure the number of pixels corresponding to a known distance.
+      3. Calculate and store the scale (pixels per mm or mm per pixel).
+      4. Optionally, use OpenCV camera calibration for lens distortion correction.
+    """
+    pass
