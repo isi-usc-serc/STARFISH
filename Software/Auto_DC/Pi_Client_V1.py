@@ -78,6 +78,35 @@ should_exit = False
 def run_data_collection(run_index):
     global client, should_exit
     # 1. Lead-in delay and buffer priming
+    # Wait for pre-match sync from host
+    print(f"[INFO] Waiting for 'sync' from host for pre-match...")
+    try:
+        client.settimeout(10)  # 10 second timeout for sync
+        msg = client.recv(1024).decode().strip()
+        if msg.lower() == "sync":
+            print("[INFO] Received 'sync' from host. Taking pre-match temperature sample...")
+            temps = {}
+            try:
+                for ch in TC_CHANNELS:
+                    value = hat.t_in_read(ch)
+                    temps[f"ch{ch}"] = round(value, 2)
+                timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+                # Send timestamp back to host for comparison
+                client.sendall(f"sync_ts:{timestamp}".encode())
+                print(f"[INFO] Pre-match temperature sample timestamp: {timestamp}")
+            except Exception as e:
+                print(f"[WARN] Failed to capture pre-match temperature sample: {e}")
+        elif msg.lower() == "stop":
+            print("[INFO] Received stop command from host during pre-match. Exiting.")
+            should_exit = True
+            return
+        else:
+            print(f"[WARN] Received unexpected message from host during pre-match sync: {msg}")
+    except socket.timeout:
+        print("[WARN] Timeout waiting for 'sync' from host. Check host connection or sync logic.")
+    finally:
+        client.settimeout(None)  # Reset timeout
+    # 2. Lead-in delay and buffer priming
     print(f"[INFO] Lead-in: waiting {LEAD_TIME} seconds before starting run {run_index + 1}...")
     lead_start = time.time()
     while time.time() - lead_start < LEAD_TIME:
@@ -85,7 +114,7 @@ def run_data_collection(run_index):
         time.sleep(0.05)
     print(f"[INFO] Lead-in complete. Sending 'ready' to host and waiting for 'trigger'...")
     client.sendall(b"ready")
-    # 2. Wait for 'trigger' from host
+    # 3. Wait for 'trigger' from host
     while True:
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "trigger":
@@ -95,7 +124,7 @@ def run_data_collection(run_index):
             print("[INFO] Received stop command from host during handshake. Exiting.")
             should_exit = True
             return
-    # 3. Main data collection loop (unchanged)
+    # 4. Main data collection loop (unchanged)
     start_time = time.time()
     sma_active = False
     pulse_start_time = None

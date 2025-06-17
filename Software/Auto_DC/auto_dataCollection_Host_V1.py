@@ -56,16 +56,16 @@ CLEANUP_INTERVAL     = 1.0  # seconds, how often to clean up old data
 BUFFER_RETENTION_SEC = 2.0  # seconds, how long to keep unmatched data
 
 # Position sample rate
-POSITION_SAMPLE_RATE = 0.5  # seconds, how often to sample position data
+POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
 TC_TYPE = "J"               # Thermocouple type: J, K, etc.
-PULSE_DURATION = 1.0        # seconds
-SEND_INTERVAL  = 1.0        # seconds between temperature samples
+PULSE_DURATION = 1.5        # seconds
+SEND_INTERVAL  = 0.25       # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
-NUM_RUNS = 5
+NUM_RUNS = 2
 INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
@@ -169,24 +169,50 @@ def run_data_collection(run_index):
             conn.settimeout(10)
             msg = conn.recv(1024).decode().strip()
             if msg.lower() == "ready":
-                print(f"[INFO] Received 'ready' from Pi. Proceeding with lead-in and trigger.")
+                print(f"[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
                 break
         except socket.timeout:
             print("[WARN] Timeout waiting for 'ready' from Pi. Retrying...")
 
-    # 2. Lead-in delay to synchronize with Pi (prime position buffer)
+    # 2. Pre-match sync step
+    print(f"[INFO] Sending 'sync' to Pi and capturing pre-match position sample...")
+    conn.sendall(b"sync")
+    ts_pos_str, x, y, z = capture_position()
+    ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
+    if x is not None and y is not None and z is not None:
+        print(f"[INFO] Pre-match position sample timestamp: {ts_pos}")
+    else:
+        print("[WARN] Pre-match position sample is invalid. Check camera connection or detection logic.")
+    # Optionally, receive Pi's timestamp for comparison
+    try:
+        conn.settimeout(2)
+        pi_sync_msg = conn.recv(1024).decode().strip()
+        if pi_sync_msg.startswith("sync_ts:"):
+            pi_ts = pi_sync_msg.split(":", 1)[1]
+            print(f"[INFO] Pi pre-match temperature sample timestamp: {pi_ts}")
+            delta = abs((ts_pos - parser.isoparse(pi_ts).replace(tzinfo=None)).total_seconds())*1000
+            print(f"[INFO] Host-Pi pre-match delta: {delta:.1f} ms")
+            if delta > 100:
+                print("[WARN] Pre-match delta is greater than 100ms. Check network latency or system load.")
+        else:
+            print("[WARN] Received unexpected message from Pi during pre-match sync.")
+    except socket.timeout:
+        print("[WARN] Did not receive Pi's pre-match timestamp. Check Pi's connection or sync logic.")
+
+    # 3. Lead-in delay to synchronize with Pi (prime position buffer)
     print(f"[INFO] Waiting for lead-in time ({LEAD_TIME} seconds) to synchronize with Pi...")
     position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
     lead_start = time.time()
     while time.time() - lead_start < LEAD_TIME:
         ts_pos_str, x, y, z = capture_position()
         ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
-        position_buffer.append((ts_pos, x, y, z))
+        if x is not None and y is not None and z is not None:
+            position_buffer.append((ts_pos, x, y, z))
         time.sleep(POSITION_SAMPLE_RATE)
     print(f"[INFO] Lead-in complete. Sending 'trigger' to Pi and starting main data collection loop.")
     conn.sendall(b"trigger")
 
-    # 3. Main data collection loop (same as before, but use the primed position_buffer)
+    # 4. Main data collection loop with Primer
     thermo_buffer = deque(maxlen=THERMO_BUFFER_SIZE)
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
@@ -199,11 +225,11 @@ def run_data_collection(run_index):
     start_time = time.time()
     last_position_time = 0
     try:
-        while time.time() - start_time < INTER_RUN_DELAY:  # Run for INTER_RUN_DELAY seconds
+        while time.time() - start_time < INTER_RUN_DELAY:
             check_for_manual_exit()
             current_time = time.time()
 
-            # Clean up old unmatched data
+            # a. Clean up old unmatched data
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
                 cutoff_time = datetime.now() - timedelta(seconds=BUFFER_RETENTION_SEC)
                 thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
@@ -212,7 +238,7 @@ def run_data_collection(run_index):
                 if len(thermo_buffer) > 0 or len(position_buffer) > 0:
                     print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
 
-            # 1. Receive thermocouple packet with timeout
+            # b. Receive thermocouple packet with timeout
             try:
                 conn.settimeout(0.1)  # 100ms timeout
                 raw = conn.makefile().readline()
@@ -228,14 +254,15 @@ def run_data_collection(run_index):
                 print(f"[ERROR] Failed to decode packet: {e}")
                 continue
 
-            # 2. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
+            # c. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
             if current_time - last_position_time >= POSITION_SAMPLE_RATE:
                 ts_pos_str, x, y, z = capture_position()
                 ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
-                position_buffer.append((ts_pos, x, y, z))
+                if x is not None and y is not None and z is not None:
+                    position_buffer.append((ts_pos, x, y, z))
                 last_position_time = current_time
 
-            # 3. Match closest TC data to position timestamp
+            # d. Match closest TC data to position timestamp
             while thermo_buffer and position_buffer:
                 ts_t, temps = thermo_buffer[0]
                 # Find the position with the closest timestamp
@@ -245,27 +272,31 @@ def run_data_collection(run_index):
                     if min_delta is None or delta < min_delta:
                         min_delta = delta
                         closest_idx = i
-                if min_delta is not None and DEBUG:
-                    print(f"[DEBUG] Thermo ts: {ts_t}, Closest position ts: {position_buffer[closest_idx][0]}, Delta: {min_delta.total_seconds()*1000:.1f} ms")
-                if min_delta is not None and min_delta <= tolerance:
-                    # Found a match
-                    ts_p, x, y, z = position_buffer[closest_idx]
-                    ch = [temps.get(f"ch{i}", "") for i in range(4)]
-                    sma_state = temps.get("sma_active", "")
-                    with open(csv_path, mode='a', newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerow([run_index + 1, ts_t.isoformat(), x, y, z] + ch + [sma_state])
-                    matches_count += 1
-                    # Remove matched entries
-                    thermo_buffer.popleft()
-                    position_buffer.remove((ts_p, x, y, z))
+                # Only match if the closest position is valid
+                if closest_idx is not None:
+                    x, y, z = position_buffer[closest_idx][1:]
+                    if x is not None and y is not None and z is not None:
+                        if min_delta is not None and DEBUG:
+                            print(f"[DEBUG] Thermo ts: {ts_t}, Closest position ts: {position_buffer[closest_idx][0]}, Delta: {min_delta.total_seconds()*1000:.1f} ms")
+                        if min_delta is not None and min_delta <= tolerance:
+                            # Found a match
+                            ts_p, x, y, z = position_buffer[closest_idx]
+                            ch = [temps.get(f"ch{i}", "") for i in range(4)]
+                            sma_state = temps.get("sma_active", "")
+                            with open(csv_path, mode='a', newline='') as file:
+                                writer = csv.writer(file)
+                                writer.writerow([run_index + 1, ts_t.isoformat(), x, y, z] + ch + [sma_state])
+                            matches_count += 1
+                            # Remove matched entries
+                            thermo_buffer.popleft()
+                            position_buffer.remove((ts_p, x, y, z))
+                            continue
+                # No match within window, drop the oldest
+                if position_buffer[0][0] < ts_t:
+                    position_buffer.popleft()
                 else:
-                    # No match within window, drop the oldest
-                    if position_buffer[0][0] < ts_t:
-                        position_buffer.popleft()
-                    else:
-                        thermo_buffer.popleft()
-                    break
+                    thermo_buffer.popleft()
+                break
 
         print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches_count}")
 
