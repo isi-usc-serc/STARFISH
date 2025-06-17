@@ -84,18 +84,14 @@ def run_data_collection(run_index):
         client.settimeout(10)  # 10 second timeout for sync
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "sync":
-            print("[INFO] Received 'sync' from host. Taking pre-match temperature sample...")
-            temps = {}
+            # Pre-match sync: record Pi's receive time and send to host
+            from datetime import timezone
+            T_pi_recv = datetime.now(timezone.utc).isoformat()
             try:
-                for ch in TC_CHANNELS:
-                    value = hat.t_in_read(ch)
-                    temps[f"ch{ch}"] = round(value, 2)
-                timestamp = datetime.datetime.utcnow().isoformat() + "Z"
-                # Send timestamp back to host for comparison
-                client.sendall(f"sync_ts:{timestamp}".encode())
-                print(f"[INFO] Pre-match temperature sample timestamp: {timestamp}")
+                client.sendall(f"sync_ts:{T_pi_recv}".encode())
+                print(f"[INFO] Sent sync timestamp to host: {T_pi_recv}")
             except Exception as e:
-                print(f"[WARN] Failed to capture pre-match temperature sample: {e}")
+                print(f"[WARN] Failed to send sync timestamp: {e}")
         elif msg.lower() == "stop":
             print("[INFO] Received stop command from host during pre-match. Exiting.")
             should_exit = True

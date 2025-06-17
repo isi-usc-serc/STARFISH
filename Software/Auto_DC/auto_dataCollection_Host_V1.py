@@ -176,28 +176,50 @@ def run_data_collection(run_index):
 
     # 2. Pre-match sync step
     print(f"[INFO] Sending 'sync' to Pi and capturing pre-match position sample...")
-    conn.sendall(b"sync")
-    ts_pos_str, x, y, z = capture_position()
-    ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
-    if x is not None and y is not None and z is not None:
-        print(f"[INFO] Pre-match position sample timestamp: {ts_pos}")
-    else:
-        print("[WARN] Pre-match position sample is invalid. Check camera connection or detection logic.")
-    # Optionally, receive Pi's timestamp for comparison
+    max_sync_attempts = 3
+    sync_success = False
+    rtt_offset = 0  # Default offset
+    for attempt in range(max_sync_attempts):
+        T_host_send = datetime.now()
+        conn.sendall(b"sync")
+        # Try to get a valid position sample
+        for _ in range(5):  # Try up to 5 times to get a valid sample
+            ts_pos_str, x, y, z = capture_position()
+            if x is not None and y is not None and z is not None:
+                ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
+                print(f"[INFO] Pre-match position sample timestamp: {ts_pos}")
+                sync_success = True
+                break
+            time.sleep(0.1)  # Short delay between attempts
+        if sync_success:
+            break
+        print(f"[WARN] Sync attempt {attempt + 1} failed. Retrying...")
+        time.sleep(0.5)  # Delay between sync attempts
+    if not sync_success:
+        print("[ERROR] Failed to get valid position sample during pre-match sync.")
+        return
+    # Optionally, receive Pi's timestamp for comparison and calculate RTT/offset
     try:
         conn.settimeout(2)
+        T_host_recv = datetime.now()
         pi_sync_msg = conn.recv(1024).decode().strip()
         if pi_sync_msg.startswith("sync_ts:"):
-            pi_ts = pi_sync_msg.split(":", 1)[1]
-            print(f"[INFO] Pi pre-match temperature sample timestamp: {pi_ts}")
-            delta = abs((ts_pos - parser.isoparse(pi_ts).replace(tzinfo=None)).total_seconds())*1000
-            print(f"[INFO] Host-Pi pre-match delta: {delta:.1f} ms")
-            if delta > 100:
-                print("[WARN] Pre-match delta is greater than 100ms. Check network latency or system load.")
+            pi_ts_str = pi_sync_msg.split(":", 1)[1]
+            print(f"[INFO] Pi pre-match temperature sample timestamp: {pi_ts_str}")
+            T_pi_recv = parser.isoparse(pi_ts_str).replace(tzinfo=None)
+            rtt = (T_host_recv - T_host_send).total_seconds()
+            print(f"[INFO] Measured RTT: {rtt*1000:.1f} ms")
+            offset = (T_pi_recv - (T_host_send + (T_host_recv - T_host_send)/2)).total_seconds()
+            print(f"[INFO] Calculated clock offset (Pi - Host): {offset*1000:.1f} ms")
+            rtt_offset = offset
+            if abs(offset*1000) > 100:
+                print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
         else:
             print("[WARN] Received unexpected message from Pi during pre-match sync.")
     except socket.timeout:
         print("[WARN] Did not receive Pi's pre-match timestamp. Check Pi's connection or sync logic.")
+    finally:
+        conn.settimeout(None)  # Reset timeout
 
     # 3. Lead-in delay to synchronize with Pi (prime position buffer)
     print(f"[INFO] Waiting for lead-in time ({LEAD_TIME} seconds) to synchronize with Pi...")
@@ -217,10 +239,16 @@ def run_data_collection(run_index):
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
     csv_path = get_csv_path(run_index)
-    with open(csv_path, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
-
+    try:
+        with open(csv_path, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
+    except PermissionError:
+        print(f"[ERROR] Cannot write to {csv_path}. Please ensure the file is not open in another program.")
+        return
+    except Exception as e:
+        print(f"[ERROR] Failed to create CSV file: {e}")
+        return
     matches_count = 0
     start_time = time.time()
     last_position_time = 0
@@ -228,7 +256,6 @@ def run_data_collection(run_index):
         while time.time() - start_time < INTER_RUN_DELAY:
             check_for_manual_exit()
             current_time = time.time()
-
             # a. Clean up old unmatched data
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
                 cutoff_time = datetime.now() - timedelta(seconds=BUFFER_RETENTION_SEC)
@@ -237,7 +264,6 @@ def run_data_collection(run_index):
                 last_cleanup_time = current_time
                 if len(thermo_buffer) > 0 or len(position_buffer) > 0:
                     print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
-
             # b. Receive thermocouple packet with timeout
             try:
                 conn.settimeout(0.1)  # 100ms timeout
@@ -247,13 +273,14 @@ def run_data_collection(run_index):
                 temps = pkt.get("temperatures_C", {})
                 temps["sma_active"] = pkt.get("sma_active", "")
                 ts = parser.isoparse(timestamp).replace(tzinfo=None)
+                # Adjust Pi timestamp using calculated offset
+                ts = ts - timedelta(seconds=rtt_offset)
                 thermo_buffer.append((ts, temps))
             except socket.timeout:
                 pass
             except Exception as e:
                 print(f"[ERROR] Failed to decode packet: {e}")
                 continue
-
             # c. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
             if current_time - last_position_time >= POSITION_SAMPLE_RATE:
                 ts_pos_str, x, y, z = capture_position()
@@ -283,10 +310,14 @@ def run_data_collection(run_index):
                             ts_p, x, y, z = position_buffer[closest_idx]
                             ch = [temps.get(f"ch{i}", "") for i in range(4)]
                             sma_state = temps.get("sma_active", "")
-                            with open(csv_path, mode='a', newline='') as file:
-                                writer = csv.writer(file)
-                                writer.writerow([run_index + 1, ts_t.isoformat(), x, y, z] + ch + [sma_state])
-                            matches_count += 1
+                            try:
+                                with open(csv_path, mode='a', newline='') as file:
+                                    writer = csv.writer(file)
+                                    writer.writerow([run_index + 1, ts_t.isoformat(), x, y, z] + ch + [sma_state])
+                                matches_count += 1
+                            except Exception as e:
+                                print(f"[ERROR] Failed to write to CSV: {e}")
+                                continue
                             # Remove matched entries
                             thermo_buffer.popleft()
                             position_buffer.remove((ts_p, x, y, z))
