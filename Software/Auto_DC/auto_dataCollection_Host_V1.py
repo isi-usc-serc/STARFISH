@@ -45,7 +45,7 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS = 500  
+ALIGNMENT_WINDOW_MS = 100  # Reduced to 100ms - should be enough for network latency
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
@@ -149,11 +149,11 @@ def recv_temp_packet():
 
 ################################ DATA COLLECTION ##############################
 def run_data_collection(run_index):
-    thermo_buffer = deque(maxlen=1000)  # Limit buffer size
-    position_buffer = deque(maxlen=1000)  # Limit buffer size
+    thermo_buffer = deque(maxlen=100)    # Pi packet buffer size
+    position_buffer = deque(maxlen=100)  # Host data buffer size
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
-    CLEANUP_INTERVAL = 5.0      # Clean up old data every 5 seconds
+    CLEANUP_INTERVAL = 1.0      # Clean up more frequently
     POSITION_SAMPLE_RATE = 0.5  # Sample position data every 0.5 seconds
 
     csv_path = get_csv_path(run_index)
@@ -162,6 +162,8 @@ def run_data_collection(run_index):
         writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
 
     print(f"[INFO] Beginning data collection for run {run_index + 1}")
+    matches_count = 0
+    last_match_time = None
 
     start_time = time.time()
     last_position_time = 0
@@ -171,14 +173,15 @@ def run_data_collection(run_index):
             
             current_time = time.time()
             
-            # Clean up old unmatched data periodically
+            # Clean up old unmatched data
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
-                # Remove data older than 2 seconds
-                cutoff_time = datetime.now() - timedelta(seconds=2)
+                # Remove data older than 1 second
+                cutoff_time = datetime.now() - timedelta(seconds=1)
                 thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
                 position_buffer = deque((ts, x, y, z) for ts, x, y, z in position_buffer if ts > cutoff_time)
                 last_cleanup_time = current_time
-                print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+                if len(thermo_buffer) > 0 or len(position_buffer) > 0:
+                    print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
 
             # 1. Receive thermocouple packet with timeout
             try:
@@ -221,26 +224,24 @@ def run_data_collection(run_index):
                     with open(csv_path, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([run_index + 1, ts_p.isoformat(), x_p, y_p, z_p] + ch + [sma_state])
+                    
+                    matches_count += 1
+                    if matches_count % 10 == 0:  # Log every 10 matches
+                        print(f"[INFO] Successfully matched {matches_count} data points")
 
                     position_buffer.popleft()
                     thermo_buffer = deque((ts, t) for ts, t in thermo_buffer
                                           if ts != match_time)
+                    last_match_time = current_time
                 else:
+                    # If we can't find a match within tolerance, drop the oldest data
+                    if ts_p < match_time - tolerance:
+                        position_buffer.popleft()
+                    else:
+                        thermo_buffer.popleft()
                     break
 
-            # --- Buffer clearing for stale unmatched data ---
-            # If the head of position_buffer is too old to ever match, drop it
-            if position_buffer and thermo_buffer:
-                ts_p, *_ = position_buffer[0]
-                ts_t, _ = thermo_buffer[0]
-                if ts_p < ts_t - tolerance:
-                    print(f"[WARN] Dropping stale position data: {ts_p.isoformat()} (older than first thermo: {ts_t.isoformat()})")
-                    position_buffer.popleft()
-                elif ts_t < ts_p - tolerance:
-                    print(f"[WARN] Dropping stale thermo data: {ts_t.isoformat()} (older than first position: {ts_p.isoformat()})")
-                    thermo_buffer.popleft()
-
-        print(f"[INFO] Run {run_index + 1} completed.")
+        print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches_count}")
 
     except KeyboardInterrupt:
         print("\n[INFO] Data collection interrupted.")
