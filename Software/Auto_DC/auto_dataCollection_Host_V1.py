@@ -173,7 +173,7 @@ def run_data_collection(run_index):
                 # Remove data older than 2 seconds
                 cutoff_time = datetime.now() - timedelta(seconds=2)
                 thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
-                position_buffer = deque((ts, p) for ts, p in position_buffer if ts > cutoff_time)
+                position_buffer = deque((ts, x, y, z) for ts, x, y, z in position_buffer if ts > cutoff_time)
                 last_cleanup_time = current_time
                 print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
 

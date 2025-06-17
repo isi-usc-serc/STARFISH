@@ -71,6 +71,7 @@ for ch in TC_CHANNELS:
 
 ################################## LOOP #######################################
 def run_data_collection(run_index):
+    global client
     start_time = time.time()
     sma_active = False
     pulse_start_time = None
