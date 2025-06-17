@@ -42,10 +42,10 @@ LISTEN_IP = "0.0.0.0"  # listens for anything trying to connect
 LISTEN_PORT = 5005
 
 # Define camera IDs in use
-CAMERA_IDS = [1] #, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
+CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS = 50
+ALIGNMENT_WINDOW_MS = 500  
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
@@ -153,7 +153,8 @@ def run_data_collection(run_index):
     position_buffer = deque(maxlen=1000)  # Limit buffer size
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
-    CLEANUP_INTERVAL = 5.0  # Clean up old data every 5 seconds
+    CLEANUP_INTERVAL = 5.0      # Clean up old data every 5 seconds
+    POSITION_SAMPLE_RATE = 0.5  # Sample position data every 0.5 seconds
 
     csv_path = get_csv_path(run_index)
     with open(csv_path, mode='w', newline='') as file:
@@ -163,12 +164,14 @@ def run_data_collection(run_index):
     print(f"[INFO] Beginning data collection for run {run_index + 1}")
 
     start_time = time.time()
+    last_position_time = 0
     try:
-        while True:
+        while time.time() - start_time < INTER_RUN_DELAY:  # Run for INTER_RUN_DELAY seconds
             check_for_manual_exit()
             
-            # Clean up old unmatched data periodically
             current_time = time.time()
+            
+            # Clean up old unmatched data periodically
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
                 # Remove data older than 2 seconds
                 cutoff_time = datetime.now() - timedelta(seconds=2)
@@ -193,10 +196,12 @@ def run_data_collection(run_index):
                 print(f"[ERROR] Failed to decode packet: {e}")
                 continue
 
-            # 2. Get camera-based position data
-            ts_pos_str, x, y, z = capture_position()
-            ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
-            position_buffer.append((ts_pos, x, y, z))
+            # 2. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
+            if current_time - last_position_time >= POSITION_SAMPLE_RATE:
+                ts_pos_str, x, y, z = capture_position()
+                ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
+                position_buffer.append((ts_pos, x, y, z))
+                last_position_time = current_time
 
             # 3. Match closest TC data to position timestamp
             while thermo_buffer and position_buffer:
@@ -235,10 +240,7 @@ def run_data_collection(run_index):
                     print(f"[WARN] Dropping stale thermo data: {ts_t.isoformat()} (older than first position: {ts_p.isoformat()})")
                     thermo_buffer.popleft()
 
-            # Stop after INTER_RUN_DELAY seconds to move to next pulse
-            if time.time() - start_time > INTER_RUN_DELAY:
-                print(f"[INFO] Run {run_index + 1} completed.")
-                break
+        print(f"[INFO] Run {run_index + 1} completed.")
 
     except KeyboardInterrupt:
         print("\n[INFO] Data collection interrupted.")
