@@ -6,6 +6,9 @@
 # and SMA power pulse, and send the data along with timestamp info for the Host 
 # program.
 
+# connect to virtual environment by: 
+# > source venv/bin/activate
+
 # """
 
 #!/usr/bin/env python3

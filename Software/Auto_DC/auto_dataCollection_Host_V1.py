@@ -7,7 +7,7 @@
 # Note: Run this 'listener' program before starting the client program.
 
 # Created on Wed Jun 11 17:33:49 2025
-# @author: space_lab
+# @author: BillyChrist
 
 # To run the software, run the following commands to activate the virtual environment: 
 #  > cd "C:\Users\Owner\Desktop\SERC\STARFISH Project\Software\STARFISH"
@@ -45,7 +45,18 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS = 100  # Reduced to 100ms - should be enough for network latency
+ALIGNMENT_WINDOW_MS  = 300  # ms, for matching position and temperature data
+
+# Buffer sizes
+THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
+POSITION_BUFFER_SIZE = 100  # Host data buffer size
+
+# Cleanup interval and retention
+CLEANUP_INTERVAL     = 1.0  # seconds, how often to clean up old data
+BUFFER_RETENTION_SEC = 2.0  # seconds, how long to keep unmatched data
+
+# Position sample rate
+POSITION_SAMPLE_RATE = 0.5  # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
@@ -149,13 +160,10 @@ def recv_temp_packet():
 
 ################################ DATA COLLECTION ##############################
 def run_data_collection(run_index):
-    thermo_buffer = deque(maxlen=100)    # Pi packet buffer size
-    position_buffer = deque(maxlen=100)  # Host data buffer size
+    thermo_buffer = deque(maxlen=THERMO_BUFFER_SIZE)
+    position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
-    CLEANUP_INTERVAL = 1.0      # Clean up more frequently
-    POSITION_SAMPLE_RATE = 0.5  # Sample position data every 0.5 seconds
-
     csv_path = get_csv_path(run_index)
     with open(csv_path, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -163,20 +171,17 @@ def run_data_collection(run_index):
 
     print(f"[INFO] Beginning data collection for run {run_index + 1}")
     matches_count = 0
-    last_match_time = None
 
     start_time = time.time()
     last_position_time = 0
     try:
         while time.time() - start_time < INTER_RUN_DELAY:  # Run for INTER_RUN_DELAY seconds
             check_for_manual_exit()
-            
             current_time = time.time()
-            
+
             # Clean up old unmatched data
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
-                # Remove data older than 1 second
-                cutoff_time = datetime.now() - timedelta(seconds=1)
+                cutoff_time = datetime.now() - timedelta(seconds=BUFFER_RETENTION_SEC)
                 thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
                 position_buffer = deque((ts, x, y, z) for ts, x, y, z in position_buffer if ts > cutoff_time)
                 last_cleanup_time = current_time
@@ -208,34 +213,31 @@ def run_data_collection(run_index):
 
             # 3. Match closest TC data to position timestamp
             while thermo_buffer and position_buffer:
-                ts_p, x_p, y_p, z_p = position_buffer[0]
-                closest_pair = min(
-                    [(abs(ts_p - ts_t), ts_t, temps_t) for ts_t, temps_t in 
-                     thermo_buffer],
-                    key=lambda t: t[0],
-                    default=(None, None, None)
-                )
-
-                delta, match_time, match_temps = closest_pair
-                if delta <= tolerance:
-                    # Match found; write to CSV
-                    ch = [match_temps.get(f"ch{i}", "") for i in range(4)]
-                    sma_state = match_temps.get("sma_active", "")
+                ts_t, temps = thermo_buffer[0]
+                # Find the position with the closest timestamp
+                closest_idx, min_delta = None, None
+                for i, (ts_p, x, y, z) in enumerate(position_buffer):
+                    delta = abs(ts_t - ts_p)
+                    if min_delta is None or delta < min_delta:
+                        min_delta = delta
+                        closest_idx = i
+                if min_delta is not None:
+                    print(f"[DEBUG] Thermo ts: {ts_t}, Closest position ts: {position_buffer[closest_idx][0]}, Delta: {min_delta.total_seconds()*1000:.1f} ms")
+                if min_delta is not None and min_delta <= tolerance:
+                    # Found a match
+                    ts_p, x, y, z = position_buffer[closest_idx]
+                    ch = [temps.get(f"ch{i}", "") for i in range(4)]
+                    sma_state = temps.get("sma_active", "")
                     with open(csv_path, mode='a', newline='') as file:
                         writer = csv.writer(file)
-                        writer.writerow([run_index + 1, ts_p.isoformat(), x_p, y_p, z_p] + ch + [sma_state])
-                    
+                        writer.writerow([run_index + 1, ts_t.isoformat(), x, y, z] + ch + [sma_state])
                     matches_count += 1
-                    if matches_count % 10 == 0:  # Log every 10 matches
-                        print(f"[INFO] Successfully matched {matches_count} data points")
-
-                    position_buffer.popleft()
-                    thermo_buffer = deque((ts, t) for ts, t in thermo_buffer
-                                          if ts != match_time)
-                    last_match_time = current_time
+                    # Remove matched entries
+                    thermo_buffer.popleft()
+                    position_buffer.remove((ts_p, x, y, z))
                 else:
-                    # If we can't find a match within tolerance, drop the oldest data
-                    if ts_p < match_time - tolerance:
+                    # No match within window, drop the oldest
+                    if position_buffer[0][0] < ts_t:
                         position_buffer.popleft()
                     else:
                         thermo_buffer.popleft()
@@ -267,24 +269,42 @@ try:
     for run_index in range(NUM_RUNS):
         check_for_manual_exit()
         print(f"[INFO] Sending 'start dc' command for run {run_index + 1}")
-        conn.sendall(b"start dc")
-        run_data_collection(run_index)
+        try:
+            conn.sendall(b"start dc")
+            run_data_collection(run_index)
+        except (ConnectionResetError, BrokenPipeError) as e:
+            print(f"[ERROR] Connection lost during run {run_index + 1}: {e}")
+            break
+        except Exception as e:
+            print(f"[ERROR] Unexpected error during run {run_index + 1}: {e}")
+            break
 
         if run_index < NUM_RUNS - 1:
-            print(
-                f"[INFO] Waiting {INTER_RUN_DELAY} "
-                f"seconds before next run...\n"
-            )
-            time.sleep(INTER_RUN_DELAY)
-            check_for_manual_exit()
+            print(f"[INFO] Starting next run...")
 
-
+except KeyboardInterrupt:
+    print("\n[INFO] Data collection interrupted by user.")
+except Exception as e:
+    print(f"[ERROR] Unexpected error: {e}")
 finally:
+    try:
+        conn.sendall(b"stop")
+        print("[INFO] Sent 'stop' command to Pi.")
+    except Exception as e:
+        print(f"[WARN] Could not send 'stop' command: {e}")
+    print("[INFO] Cleaning up...")
     for cam in cams:
         cam.release()
     cv2.destroyAllWindows()
-    conn.close()
-    server.close()
+    try:
+        conn.close()
+    except:
+        pass
+    try:
+        server.close()
+    except:
+        pass
+    print("[INFO] Cleanup complete.")
 
 def calibrate_camera():
     """
