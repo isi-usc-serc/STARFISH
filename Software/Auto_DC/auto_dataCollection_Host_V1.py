@@ -45,7 +45,7 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 300  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 700  # ms, for matching position and temperature data
 
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
@@ -60,14 +60,16 @@ POSITION_SAMPLE_RATE = 0.5  # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
-TC_TYPE = "J"  # Thermocouple type: J, K, etc.
-PULSE_DURATION = 1.0     # seconds
-SEND_INTERVAL  = 1.0     # seconds between temperature samples
+TC_TYPE = "J"               # Thermocouple type: J, K, etc.
+PULSE_DURATION = 1.0        # seconds
+SEND_INTERVAL  = 1.0        # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 5
-INTER_RUN_DELAY = 20     # Interval time between pulses in seconds
-LEAD_TIME = 2.0          # seconds, lead-in before SMA pulse
+INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
+LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
+
+DEBUG = True                # Set to False to suppress debug output
 
 
 #################################### SETUP ####################################
@@ -160,8 +162,32 @@ def recv_temp_packet():
 
 ################################ DATA COLLECTION ##############################
 def run_data_collection(run_index):
-    thermo_buffer = deque(maxlen=THERMO_BUFFER_SIZE)
+    # 1. Wait for 'ready' from Pi
+    print(f"[INFO] Waiting for 'ready' from Pi before starting run {run_index + 1}...")
+    while True:
+        try:
+            conn.settimeout(10)
+            msg = conn.recv(1024).decode().strip()
+            if msg.lower() == "ready":
+                print(f"[INFO] Received 'ready' from Pi. Proceeding with lead-in and trigger.")
+                break
+        except socket.timeout:
+            print("[WARN] Timeout waiting for 'ready' from Pi. Retrying...")
+
+    # 2. Lead-in delay to synchronize with Pi (prime position buffer)
+    print(f"[INFO] Waiting for lead-in time ({LEAD_TIME} seconds) to synchronize with Pi...")
     position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
+    lead_start = time.time()
+    while time.time() - lead_start < LEAD_TIME:
+        ts_pos_str, x, y, z = capture_position()
+        ts_pos = datetime.fromisoformat(ts_pos_str).replace(tzinfo=None)
+        position_buffer.append((ts_pos, x, y, z))
+        time.sleep(POSITION_SAMPLE_RATE)
+    print(f"[INFO] Lead-in complete. Sending 'trigger' to Pi and starting main data collection loop.")
+    conn.sendall(b"trigger")
+
+    # 3. Main data collection loop (same as before, but use the primed position_buffer)
+    thermo_buffer = deque(maxlen=THERMO_BUFFER_SIZE)
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
     last_cleanup_time = time.time()
     csv_path = get_csv_path(run_index)
@@ -169,9 +195,7 @@ def run_data_collection(run_index):
         writer = csv.writer(file)
         writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
 
-    print(f"[INFO] Beginning data collection for run {run_index + 1}")
     matches_count = 0
-
     start_time = time.time()
     last_position_time = 0
     try:
@@ -221,7 +245,7 @@ def run_data_collection(run_index):
                     if min_delta is None or delta < min_delta:
                         min_delta = delta
                         closest_idx = i
-                if min_delta is not None:
+                if min_delta is not None and DEBUG:
                     print(f"[DEBUG] Thermo ts: {ts_t}, Closest position ts: {position_buffer[closest_idx][0]}, Delta: {min_delta.total_seconds()*1000:.1f} ms")
                 if min_delta is not None and min_delta <= tolerance:
                     # Found a match

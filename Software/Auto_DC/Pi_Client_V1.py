@@ -33,7 +33,7 @@ PC_PORT = 5005
 
 SMA_GPIO_PIN = 18
 
-DEBUG = True  # Set to False to reduce debug output
+DEBUG = True             # Set to False to reduce debug output
 
 ################################## SETUP ######################################
 # GPIO Setup
@@ -73,8 +73,29 @@ for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
 
 ################################## LOOP #######################################
+should_exit = False
+
 def run_data_collection(run_index):
-    global client
+    global client, should_exit
+    # 1. Lead-in delay and buffer priming
+    print(f"[INFO] Lead-in: waiting {LEAD_TIME} seconds before starting run {run_index + 1}...")
+    lead_start = time.time()
+    while time.time() - lead_start < LEAD_TIME:
+        # Optionally, you could prime a buffer here if needed
+        time.sleep(0.05)
+    print(f"[INFO] Lead-in complete. Sending 'ready' to host and waiting for 'trigger'...")
+    client.sendall(b"ready")
+    # 2. Wait for 'trigger' from host
+    while True:
+        msg = client.recv(1024).decode().strip()
+        if msg.lower() == "trigger":
+            print("[INFO] Received 'trigger' from host. Starting data collection.")
+            break
+        elif msg.lower() == "stop":
+            print("[INFO] Received stop command from host during handshake. Exiting.")
+            should_exit = True
+            return
+    # 3. Main data collection loop (unchanged)
     start_time = time.time()
     sma_active = False
     pulse_start_time = None
@@ -82,6 +103,9 @@ def run_data_collection(run_index):
     pulse_sent = False
 
     while True:
+        if should_exit:
+            GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
+            break
         now = time.time()
         elapsed = now - start_time
 
@@ -168,6 +192,7 @@ try:
             run_index += 1
         elif msg.lower() == "stop":
             print("[INFO] Received stop command from host. Exiting.")
+            should_exit = True
             break
 
 except KeyboardInterrupt:
