@@ -1,15 +1,19 @@
-""" 
-(PC) Host Program: Automated Data Collection
-This script will listen for timestamp data from the raspberry pi
-and match it to the position data timestamps, and publish the data to 
-a CSV file.
+# """ 
+# (PC) Host Program: Automated Data Collection
+# This script will listen for timestamp data from the raspberry pi
+# and match it to the position data timestamps, and publish the data to 
+# a CSV file.
 
-Note: Run this 'listener' program before starting the client program.
+# Note: Run this 'listener' program before starting the client program.
 
-Created on Wed Jun 11 17:33:49 2025
-@author: space_lab
+# Created on Wed Jun 11 17:33:49 2025
+# @author: space_lab
 
-"""
+# To run the software, run the following commands to activate the virtual environment: 
+#  > cd "C:\Users\Owner\Desktop\SERC\STARFISH Project\Software\STARFISH"
+#  > & "venv\Scripts\Activate.ps1"    (in VScode terminal)
+
+# """
 
 # === Import libraries ===
 import cv2
@@ -28,7 +32,7 @@ import select
 
 ################################## CONFIGURATION ##############################
 # Set data logging directory
-LOG_DIR = r"C:\Users\space_lab\Desktop\STARFISH Test Data\Thermo_Position_Data"
+LOG_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Thermo_Position_Data"
 FRAME_DIR = os.path.join(LOG_DIR, "frames")
 
 # Set port and IP info (currently listening for any connecting ip)
@@ -141,9 +145,11 @@ def recv_temp_packet():
 
 ################################ DATA COLLECTION ##############################
 def run_data_collection(run_index):
-    thermo_buffer = deque()
-    position_buffer = deque()
+    thermo_buffer = deque(maxlen=1000)  # Limit buffer size
+    position_buffer = deque(maxlen=1000)  # Limit buffer size
     tolerance = timedelta(milliseconds=ALIGNMENT_WINDOW_MS)
+    last_cleanup_time = time.time()
+    CLEANUP_INTERVAL = 5.0  # Clean up old data every 5 seconds
 
     csv_path = get_csv_path(run_index)
     with open(csv_path, mode='w', newline='') as file:
@@ -157,10 +163,32 @@ def run_data_collection(run_index):
     try:
         while True:
             check_for_manual_exit()
-            # 1. Receive thermocouple packet
-            ts_thermo, temps = recv_temp_packet()
-            if ts_thermo and temps:
-                thermo_buffer.append((ts_thermo, temps))
+            
+            # Clean up old unmatched data periodically
+            current_time = time.time()
+            if current_time - last_cleanup_time > CLEANUP_INTERVAL:
+                # Remove data older than 2 seconds
+                cutoff_time = datetime.now() - timedelta(seconds=2)
+                thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
+                position_buffer = deque((ts, p) for ts, p in position_buffer if ts > cutoff_time)
+                last_cleanup_time = current_time
+                print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+
+            # 1. Receive thermocouple packet with timeout
+            try:
+                conn.settimeout(0.1)  # 100ms timeout
+                raw = conn.makefile().readline()
+                pkt = json.loads(raw)
+                timestamp = pkt["timestamp"]
+                temps = pkt.get("temperatures_C", {})
+                temps["sma_active"] = pkt.get("sma_active", "")
+                ts = parser.isoparse(timestamp).replace(tzinfo=None)
+                thermo_buffer.append((ts, temps))
+            except socket.timeout:
+                pass
+            except Exception as e:
+                print(f"[ERROR] Failed to decode packet: {e}")
+                continue
 
             # 2. Get camera-based position data
             ts_pos_str, x, y, z = capture_position()
@@ -179,7 +207,6 @@ def run_data_collection(run_index):
 
                 delta, match_time, match_temps = closest_pair
                 if delta <= tolerance:
-                    
                     # Match found; write to CSV
                     ch = [match_temps.get(f"ch{i}", "") for i in range(4)]
                     sma_state = match_temps.get("sma_active", "")
@@ -201,6 +228,8 @@ def run_data_collection(run_index):
 
     except KeyboardInterrupt:
         print("\n[INFO] Data collection interrupted.")
+    finally:
+        conn.settimeout(None)  # Reset timeout
 
 
 ################################# MAIN LOOP ###################################
