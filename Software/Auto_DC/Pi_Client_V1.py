@@ -88,8 +88,8 @@ def run_data_collection(run_index):
             from datetime import timezone
             T_pi_recv = datetime.now(timezone.utc).isoformat()
             try:
-                client.sendall(f"sync_ts:{T_pi_recv}".encode())
-                print(f"[INFO] Sent sync timestamp to host: {T_pi_recv}")
+                client.sendall(f"sync_ts:{T_pi_recv}\n".encode())
+                print(f"[INFO] Sent sync timestamp to host: {T_pi_recv} at {datetime.datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 print(f"[WARN] Failed to send sync timestamp: {e}")
         elif msg.lower() == "stop":

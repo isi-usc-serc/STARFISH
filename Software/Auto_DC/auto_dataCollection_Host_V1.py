@@ -31,6 +31,11 @@ import threading
 import sys
 import select
 
+############################ Characterization Parameters #######################
+Volts   = 5.0      # volts
+Current = 1.0      # amperes
+Load    = 200      # grams
+
 
 ################################## CONFIGURATION ##############################
 # Set data logging directory
@@ -65,7 +70,7 @@ PULSE_DURATION = 1.5        # seconds
 SEND_INTERVAL  = 0.25       # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
-NUM_RUNS = 2
+NUM_RUNS = 1
 INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
@@ -75,6 +80,7 @@ DEBUG = True                # Set to False to suppress debug output
 #################################### SETUP ####################################
 os.makedirs(FRAME_DIR, exist_ok=True)
 
+# Initialize cameras using openCV
 cams = []
 print("[INFO] Initializing cameras...")
 for cam_id in CAMERA_IDS:
@@ -85,9 +91,14 @@ for cam_id in CAMERA_IDS:
         print(f"[ERROR] Camera {cam_id} failed to open")
     cams.append(cam)
 
+# File naming convention
 def get_csv_path(run_index):
-    return os.path.join(LOG_DIR, f"data_log_run_{run_index + 1}.csv")
+    v_str = f"{str(Volts).replace('.', 'p')}V"
+    a_str = f"{str(Current).replace('.', 'p')}A"
+    g_str = f"{int(Load)}G"
+    return os.path.join(LOG_DIR, f"{v_str}_{a_str}_{g_str}_run_{run_index + 1}.csv")
 
+# Define socket for communication with Pi
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind((LISTEN_IP, LISTEN_PORT))
@@ -103,8 +114,8 @@ config_packet = {
     "channels": TC_CHANNELS,
     "tc_type": TC_TYPE,
     "num_runs": NUM_RUNS,
-    "run_time": INTER_RUN_DELAY,  # send run duration to Pi
-    "lead_time": LEAD_TIME        # send lead-in time to Pi
+    "run_time": INTER_RUN_DELAY,
+    "lead_time": LEAD_TIME
 }
 conn.sendall(json.dumps(config_packet).encode())
 
@@ -202,7 +213,8 @@ def run_data_collection(run_index):
     try:
         conn.settimeout(2)
         T_host_recv = datetime.now()
-        pi_sync_msg = conn.recv(1024).decode().strip()
+        pi_sync_msg = conn.makefile().readline().strip()
+        print(f"[DEBUG] Raw sync message from Pi: '{pi_sync_msg}'")
         if pi_sync_msg.startswith("sync_ts:"):
             pi_ts_str = pi_sync_msg.split(":", 1)[1]
             print(f"[INFO] Pi pre-match temperature sample timestamp: {pi_ts_str}")
@@ -216,8 +228,12 @@ def run_data_collection(run_index):
                 print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
         else:
             print("[WARN] Received unexpected message from Pi during pre-match sync.")
+            print("[ERROR] Aborting run due to failed sync.")
+            return
     except socket.timeout:
         print("[WARN] Did not receive Pi's pre-match timestamp. Check Pi's connection or sync logic.")
+        print("[ERROR] Aborting run due to failed sync.")
+        return
     finally:
         conn.settimeout(None)  # Reset timeout
 
