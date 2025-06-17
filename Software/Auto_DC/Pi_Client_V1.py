@@ -30,6 +30,8 @@ PC_PORT = 5005
 
 SMA_GPIO_PIN = 18
 
+DEBUG = True  # Set to False to reduce debug output
+
 ################################## SETUP ######################################
 # GPIO Setup
 GPIO.setwarnings(False)
@@ -52,7 +54,7 @@ except HatError as e:
     client.close()
     exit(1)
 
-# Receive Configuration From Host
+######################### Receive Configuration From Host ######################
 config = json.loads(client.recv(1024).decode())
 print(f"[INFO] Received config: {config}")
 
@@ -60,65 +62,109 @@ TC_CHANNELS = config.get("channels", [0])                # default: [0]
 SMA_PULSE_DURATION = config.get("pulse_duration", 1.0)   # default: 1.0 sec
 SEND_INTERVAL = config.get("send_interval", 0.25)        # default: 0.25 sec
 TC_TYPE = getattr(TcTypes, f"TYPE_{config.get('tc_type', 'J')}")
+NUM_RUNS = config.get("num_runs", 1)
+RUN_TIME = config.get("run_time", 20.0)  # seconds
+LEAD_TIME = config.get("lead_time", 2.0) # seconds
 
 for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
 
 ################################## LOOP #######################################
-def run_data_collection():
-    sma_active = True
-    pulse_start_time = time.time()
-    last_sample_time = 0
-
-    # Begin SMA pulse
-    GPIO.output(SMA_GPIO_PIN, GPIO.HIGH)
+def run_data_collection(run_index):
+    start_time = time.time()
+    sma_active = False
+    pulse_start_time = None
+    last_sample_time = time.time()
+    pulse_sent = False
 
     while True:
         now = time.time()
+        elapsed = now - start_time
+
+        # Lead-in period: wait before activating SMA
+        if not pulse_sent and elapsed >= LEAD_TIME:
+            GPIO.output(SMA_GPIO_PIN, GPIO.HIGH)
+            sma_active = True
+            pulse_start_time = now
+            pulse_sent = True
+            if DEBUG:
+                print(f"[INFO] SMA pulse started at t={elapsed:.2f}s")
 
         # End SMA pulse after configured duration
-        if sma_active and (now - pulse_start_time >= SMA_PULSE_DURATION):
+        if sma_active and pulse_sent and (now - pulse_start_time >= SMA_PULSE_DURATION):
             GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
             sma_active = False
+            if DEBUG:
+                print(f"[INFO] SMA pulse ended at t={elapsed:.2f}s")
 
         # Sample temperature and send to host at fixed interval
-        if now - last_sample_time >= SEND_INTERVAL:
-            last_sample_time = now
-
+        if now >= last_sample_time:
             temps = {}
             for ch in TC_CHANNELS:
-                value = hat.t_in_read(ch)
-                temps[f"ch{ch}"] = round(value, 2)
+                try:
+                    value = hat.t_in_read(ch)
+                    temps[f"ch{ch}"] = round(value, 2)
+                except Exception as e:
+                    temps[f"ch{ch}"] = None
+                    if DEBUG:
+                        print(f"[ERROR] Temp read failed for ch{ch}: {e}")
 
             timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
             packet = {
+                "run_index": run_index + 1,
                 "timestamp": timestamp,
                 "temperatures_C": temps,
                 "sma_active": sma_active
             }
 
             try:
-                print("[DEBUG] Sending packet...")
+                if DEBUG:
+                    print("[DEBUG] Sending packet...")
                 client.sendall((json.dumps(packet) + '\n').encode())
-                print(f"[INFO] Sent: {packet}")
-            except:
-                print("[ERROR] Failed to send packet to host.")
-                break  # break if connection drops
+                if DEBUG:
+                    print(f"[INFO] Sent: {packet}")
+            except Exception as e:
+                print(f"[ERROR] Failed to send packet to host: {e}")
+                # Try to reconnect
+                reconnect_attempts = 0
+                while reconnect_attempts < 5:
+                    try:
+                        time.sleep(2)
+                        client.close()
+                        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        client.connect((PC_IP, PC_PORT))
+                        print(f"[INFO] Reconnected to PC at {PC_IP}:{PC_PORT}")
+                        break
+                    except Exception as e2:
+                        print(f"[ERROR] Reconnect attempt {reconnect_attempts+1} failed: {e2}")
+                        reconnect_attempts += 1
+                if reconnect_attempts == 5:
+                    print("[FATAL] Could not reconnect to host. Exiting.")
+                    break
 
-        time.sleep(0.01)  # Prevent maxing out CPU
+            last_sample_time += SEND_INTERVAL
+            sleep_time = last_sample_time - time.time()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
-        # Optional: stop sending after SMA pulse ends + some buffer time
-        if not sma_active and (now - pulse_start_time > SMA_PULSE_DURATION + 2.0):
+        # Stop after run_time seconds
+        if elapsed > RUN_TIME:
+            GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
             break
 
 try:
-    print("[INFO] Waiting for 'start dc' commands from host...")
+    print("[INFO] Waiting for 'start dc' or 'stop' commands from host...")
+    run_index = 0
     while True:
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "start dc":
-            print("[INFO] Starting new data collection run...")
-            run_data_collection()
+            print(f"[INFO] Starting data collection run {run_index + 1}...")
+            run_data_collection(run_index)
+            run_index += 1
+        elif msg.lower() == "stop":
+            print("[INFO] Received stop command from host. Exiting.")
+            break
 
 except KeyboardInterrupt:
     print("\n[INFO] Stopping script.")

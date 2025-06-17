@@ -55,9 +55,8 @@ SEND_INTERVAL  = 1.0     # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 5
-INTER_RUN_DELAY = 20  # Interval time between pulses in seconds
-
-
+INTER_RUN_DELAY = 20     # Interval time between pulses in seconds
+LEAD_TIME = 2.0          # seconds, lead-in before SMA pulse
 
 
 #################################### SETUP ####################################
@@ -89,7 +88,10 @@ config_packet = {
     "pulse_duration": PULSE_DURATION,
     "send_interval": SEND_INTERVAL,
     "channels": TC_CHANNELS,
-    "tc_type": TC_TYPE
+    "tc_type": TC_TYPE,
+    "num_runs": NUM_RUNS,
+    "run_time": INTER_RUN_DELAY,  # send run duration to Pi
+    "lead_time": LEAD_TIME        # send lead-in time to Pi
 }
 conn.sendall(json.dumps(config_packet).encode())
 
@@ -156,8 +158,7 @@ def run_data_collection(run_index):
     csv_path = get_csv_path(run_index)
     with open(csv_path, mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(["time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4",
-                         "sma_active"])
+        writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
 
     print(f"[INFO] Beginning data collection for run {run_index + 1}")
 
@@ -214,8 +215,7 @@ def run_data_collection(run_index):
                     sma_state = match_temps.get("sma_active", "")
                     with open(csv_path, mode='a', newline='') as file:
                         writer = csv.writer(file)
-                        writer.writerow([ts_p.isoformat(), x_p, y_p, z_p] 
-                                        + ch + [sma_state])
+                        writer.writerow([run_index + 1, ts_p.isoformat(), x_p, y_p, z_p] + ch + [sma_state])
 
                     position_buffer.popleft()
                     thermo_buffer = deque((ts, t) for ts, t in thermo_buffer
