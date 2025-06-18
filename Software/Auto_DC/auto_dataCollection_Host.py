@@ -31,9 +31,9 @@ import select
 import numpy as np
 
 ############################ Characterization Parameters #######################
-Volts   = 5.0      # volts
-Current = 1.0      # amperes
-Load    = 200      # grams
+Volts   = 3.3      # volts
+Current = 0.0      # amperes
+Load    = 250      # grams
 
 
 ################################## CONFIGURATION ##############################
@@ -145,13 +145,11 @@ def read_socket_line():
 
 ############################# CAMERA PROCESSING ###############################
 def detect_position(frame):
-    """Basic red ball detection to extract (x, y) or z position."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-   
-    # Configure color detection upper and lower bounds
-    lower_red = (0, 100, 100)
-    upper_red = (10, 255, 255)
-    mask = cv2.inRange(hsv, lower_red, upper_red)
+    # Use auto-calibrated HSV range if available
+    lower = hsv_lower if hsv_lower is not None else (0, 100, 100)
+    upper = hsv_upper if hsv_upper is not None else (10, 255, 255)
+    mask = cv2.inRange(hsv, lower, upper)
     moments = cv2.moments(mask)
     if moments["m00"] != 0:
         cx = int(moments["m10"] / moments["m00"])
@@ -164,6 +162,8 @@ def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
     calib_path = os.path.join(calib_dir, "calibration_data.txt")
     pixels_per_mm = None
     template_files = []
+    hsv_lower = None
+    hsv_upper = None
     with open(calib_path, "r") as f:
         for line in f:
             if line.startswith("pixels_per_mm_ball"):
@@ -171,9 +171,13 @@ def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
             if line.startswith("template_files"):
                 files = line.split("=")[1].strip()
                 template_files = [os.path.join(calib_dir, fn.strip()) for fn in files.split(",") if fn.strip()]
+            if line.startswith("hsv_lower"):
+                hsv_lower = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
+            if line.startswith("hsv_upper"):
+                hsv_upper = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
     if pixels_per_mm is None:
         raise ValueError("pixels_per_mm_ball not found in calibration file.")
-    return pixels_per_mm, template_files
+    return pixels_per_mm, template_files, hsv_lower, hsv_upper
 
 def load_templates(template_files):
     templates = []
@@ -206,7 +210,7 @@ def detect_position_with_templates(frame, templates):
     return None, None
 
 # Load calibration and templates at startup
-pixels_per_mm, template_files = load_calibration()
+pixels_per_mm, template_files, hsv_lower, hsv_upper = load_calibration()
 templates = load_templates(template_files)
 
 # Update capture_position to use template matching
@@ -437,6 +441,7 @@ def run_data_collection(run_index):
                 
         print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches}")
         print(f"[DEBUG] Final buffer states: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+        
         # Print first few timestamps for manual inspection
         print("[DEBUG] First 5 thermo timestamps:", [t[0] for t in list(thermo_buffer)[:5]])
         print("[DEBUG] First 5 position timestamps:", [p[0] for p in list(position_buffer)[:5]])

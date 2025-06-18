@@ -189,6 +189,27 @@ def main():
         # Update calibration_data.txt with template filenames
         with open(calib_path, "a") as f:
             f.write(f"template_files = {','.join([os.path.basename(fn) for fn in template_filenames])}\n")
+
+        # --- Compute HSV range from templates and save to calibration file ---
+        hsv_mins = []
+        hsv_maxs = []
+        for fn in template_filenames:
+            img = cv2.imread(fn)
+            if img is None:
+                continue
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            hsv_mins.append(hsv.reshape(-1, 3).min(axis=0))
+            hsv_maxs.append(hsv.reshape(-1, 3).max(axis=0))
+        if hsv_mins and hsv_maxs:
+            min_hsv = np.min(np.array(hsv_mins), axis=0)
+            max_hsv = np.max(np.array(hsv_maxs), axis=0)
+            margin = 10
+            lower = np.clip(min_hsv - margin, [0, 0, 0], [179, 255, 255]).astype(int)
+            upper = np.clip(max_hsv + margin, [0, 0, 0], [179, 255, 255]).astype(int)
+            print(f"[INFO] Auto-detected HSV range: lower={tuple(lower)}, upper={tuple(upper)}")
+            with open(calib_path, "a") as f:
+                f.write(f"hsv_lower = {tuple(lower)}\n")
+                f.write(f"hsv_upper = {tuple(upper)}\n")
     else:
         print("[INFO] Skipping template training.")
 
