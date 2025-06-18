@@ -64,7 +64,7 @@ BUFFER_RETENTION_SEC = 1.0  # seconds, how long to keep unmatched data
 POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
-TC_CHANNELS = [0, 1, 2, 3]
+TC_CHANNELS    = [0]        # [0, 1, 2, 3], 4 max channels
 TC_TYPE = "J"               # Thermocouple type: J, K, etc.
 PULSE_DURATION = 1.5        # seconds
 SEND_INTERVAL  = 0.25       # seconds between temperature samples
