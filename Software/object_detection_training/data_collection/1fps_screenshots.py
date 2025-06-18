@@ -3,7 +3,7 @@ import time
 import os
 
 # Parameters
-output_dir = "captured_frames/set3"
+output_dir = "captured_frames/set7"
 fps = 1  # capture rate in Hz
 delay = 1.0 / fps
 
@@ -11,7 +11,7 @@ delay = 1.0 / fps
 os.makedirs(output_dir, exist_ok=True)
 
 # Initialize camera
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(4)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
