@@ -84,12 +84,14 @@ def run_data_collection(run_index):
         client.settimeout(10)  # 10 second timeout for sync
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "sync":
+            print("[INFO] Received 'sync' from host. Syncing clocks and sending timestamp...")
             # Pre-match sync: record Pi's receive time and send to host
             from datetime import timezone
             T_pi_recv = datetime.now(timezone.utc).isoformat()
             try:
                 client.sendall(f"sync_ts:{T_pi_recv}\n".encode())
                 print(f"[INFO] Sent sync timestamp to host: {T_pi_recv} at {datetime.datetime.now(timezone.utc).isoformat()}")
+                print("[INFO] Sync handshake complete.")
             except Exception as e:
                 print(f"[WARN] Failed to send sync timestamp: {e}")
         elif msg.lower() == "stop":

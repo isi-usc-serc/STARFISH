@@ -20,7 +20,7 @@ import re
 DATA_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Thermo_Position_Data"
 
 # Find all run CSV files
-csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "data_log_run_*.csv")))
+csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "*V_*A_*G_run_*.csv")))
 
 all_displacement = []
 all_temp = []

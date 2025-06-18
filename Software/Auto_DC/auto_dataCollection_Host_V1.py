@@ -107,6 +107,9 @@ print(f"[INFO] Listening for Raspberry Pi on {LISTEN_IP}:{LISTEN_PORT}")
 conn, addr = server.accept()
 print(f"[INFO] Connected to Raspberry Pi at {addr}", flush=True)
 
+# Create a single file object for all line-based reads
+conn_file = conn.makefile('r')
+
 # Send configuration to Pi
 config_packet = {
     "pulse_duration": PULSE_DURATION,
@@ -160,7 +163,7 @@ def capture_position():
 def recv_temp_packet():
     """Receive and decode thermocouple data."""
     try:
-        raw = conn.makefile().readline()
+        raw = conn_file.readline()
         pkt = json.loads(raw)
         timestamp = pkt["timestamp"]
         temps = pkt.get("temperatures_C", {})
@@ -178,7 +181,7 @@ def run_data_collection(run_index):
     while True:
         try:
             conn.settimeout(10)
-            msg = conn.recv(1024).decode().strip()
+            msg = conn_file.readline().strip()
             if msg.lower() == "ready":
                 print(f"[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
                 break
@@ -192,7 +195,7 @@ def run_data_collection(run_index):
     rtt_offset = 0  # Default offset
     for attempt in range(max_sync_attempts):
         T_host_send = datetime.now()
-        conn.sendall(b"sync")
+        conn.sendall(b"sync\n")
         # Try to get a valid position sample
         for _ in range(5):  # Try up to 5 times to get a valid sample
             ts_pos_str, x, y, z = capture_position()
@@ -213,7 +216,7 @@ def run_data_collection(run_index):
     try:
         conn.settimeout(2)
         T_host_recv = datetime.now()
-        pi_sync_msg = conn.makefile().readline().strip()
+        pi_sync_msg = conn_file.readline().strip()
         print(f"[DEBUG] Raw sync message from Pi: '{pi_sync_msg}'")
         if pi_sync_msg.startswith("sync_ts:"):
             pi_ts_str = pi_sync_msg.split(":", 1)[1]
@@ -283,7 +286,7 @@ def run_data_collection(run_index):
             # b. Receive thermocouple packet with timeout
             try:
                 conn.settimeout(0.1)  # 100ms timeout
-                raw = conn.makefile().readline()
+                raw = conn_file.readline()
                 pkt = json.loads(raw)
                 timestamp = pkt["timestamp"]
                 temps = pkt.get("temperatures_C", {})
