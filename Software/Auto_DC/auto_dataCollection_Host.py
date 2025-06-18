@@ -49,7 +49,7 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 100  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 300  # ms, for matching position and temperature data
 
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
@@ -61,7 +61,7 @@ CLEANUP_INTERVAL     = 0.5  # seconds, how often to clean up old data
 BUFFER_RETENTION_SEC = 1.0  # seconds, how long to keep unmatched data
 
 # Position sample rate
-POSITION_SAMPLE_RATE = 0.1  # seconds, how often to sample position data
+POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
@@ -74,7 +74,8 @@ NUM_RUNS = 10
 INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
-DEBUG = True                # Set to False to suppress debug output
+# Debug mode. Set to False to suppress debug output
+DEBUG = True                
 
 # Error handling configuration
 MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
@@ -218,6 +219,7 @@ def capture_position():
         if not ret:
             z_positions.append(None)
             continue
+        
         # Use template matching for position detection
         center, match_val = detect_position_with_templates(frame, templates)
         if center is not None:
@@ -248,6 +250,7 @@ def recv_temp_packet():
         temps = pkt.get("temperatures_C", {})
         temps["sma_active"] = pkt.get("sma_active", "")
         ts = parser.isoparse(timestamp)
+       
         # Adjust Pi timestamp using calculated offset
         ts = ts - timedelta(seconds=time_offset)  # Use time_offset instead of rtt_offset
         return ts, temps
@@ -321,6 +324,7 @@ def run_data_collection(run_index):
                 
             pi_ts = float(msg.split(':')[1])
             host_ts = time.time()
+           
             # Convert position_sample[0] (ISO string) to float timestamp
             host_pos_ts = parser.isoparse(position_sample[0]).timestamp()
             rtt = (host_ts - host_pos_ts) * 1000  # Convert to ms
@@ -345,12 +349,16 @@ def run_data_collection(run_index):
         # 4. Main data collection loop
         matches = 0
         sma_start_time = None
-        
+        run_start_time = time.time()
         # Helper to convert position_buffer timestamp to float
         def get_pos_ts(pos):
             return parser.isoparse(pos[0]).timestamp()
 
         while True:
+            # Exit if run time exceeded
+            if time.time() - run_start_time > (INTER_RUN_DELAY + PULSE_DURATION + 5):  # Add buffer for safety
+                print("[INFO] Run time exceeded, ending run.")
+                break
             # a. Capture position data
             position_sample = capture_position()
             if position_sample is not None:
@@ -364,16 +372,19 @@ def run_data_collection(run_index):
                     
                 msg = raw.strip()
                 
-                # Check for SMA pulse start
-                if msg.startswith('sma_start:'):
-                    sma_start_time = float(msg.split(':')[1])
-                    print(f"[INFO] SMA pulse start received from Pi, t=0 set at {sma_start_time}")
+                # Check for SMA pulse start (accept both 'sma_start:' and 'pulse_start_ts:')
+                if msg.startswith('sma_start:') or msg.startswith('pulse_start_ts:'):
+                    try:
+                        sma_start_time = float(msg.split(':')[1])
+                        print(f"[INFO] SMA pulse start received from Pi, t=0 set at {sma_start_time}")
+                    except Exception as e:
+                        print(f"[ERROR] Failed to parse SMA pulse start time: {e}")
                     continue
                     
-                # Process temperature data
-                if msg.startswith('temp:'):
-                    try:
-                        data = json.loads(msg[5:])
+                # Parse temperature data as JSON packet
+                try:
+                    data = json.loads(msg)
+                    if "timestamp" in data and "temperatures_C" in data:
                         thermo_ts = data['timestamp']
                         thermo_buffer.append((thermo_ts, data))
                         
@@ -381,29 +392,33 @@ def run_data_collection(run_index):
                         if position_buffer:
                             closest_pos = min(position_buffer, key=lambda x: abs(get_pos_ts(x) - thermo_ts))
                             delta = abs(get_pos_ts(closest_pos) - thermo_ts) * 1000  # Convert to ms
-                            print(f"[DEBUG] Thermo ts: {thermo_ts:.3f}, Closest position ts: {closest_pos[0]:.3f}, Delta: {delta:.1f} ms")
-                            
+                            print(f"[DEBUG] Thermo ts: {thermo_ts:.3f}, Closest position ts: {get_pos_ts(closest_pos):.3f}, Delta: {delta:.1f} ms")
                             if delta <= ALIGNMENT_WINDOW_MS:
                                 matches += 1
                                 # Write to CSV
                                 if sma_start_time is not None:
                                     time_ms = (thermo_ts - sma_start_time) * 1000
+                                    if DEBUG:
+                                        print(f"[DEBUG] Writing row to CSV: time_ms={time_ms}, x={closest_pos[1]}, y={closest_pos[2]}, temps={[data['temperatures_C'].get(f'ch{i}') for i in range(4)]}, sma_active={data['sma_active']}")
                                     writer.writerow({
                                         'time_ms': time_ms,
-                                        'x_mm': closest_pos[1][0],
-                                        'y_mm': closest_pos[1][1],
-                                        'temp_ch0': data['ch0'],
-                                        'temp_ch1': data['ch1'],
-                                        'temp_ch2': data['ch2'],
-                                        'temp_ch3': data['ch3'],
+                                        'x_mm': closest_pos[1],
+                                        'y_mm': closest_pos[2],
+                                        'temp_ch0': data['temperatures_C'].get('ch0'),
+                                        'temp_ch1': data['temperatures_C'].get('ch1'),
+                                        'temp_ch2': data['temperatures_C'].get('ch2'),
+                                        'temp_ch3': data['temperatures_C'].get('ch3'),
                                         'sma_active': data['sma_active']
                                     })
                                     csv_file.flush()
-                                    
-                    except json.JSONDecodeError as e:
-                        print(f"[ERROR] Failed to decode temperature data: {e}")
-                        continue
-                        
+                                else:
+                                    if DEBUG:
+                                        print(f"[DEBUG] Skipping CSV write: sma_start_time is None (thermo_ts={thermo_ts})")
+                    # else: not a temperature packet, ignore
+                    
+                except json.JSONDecodeError:
+                    # Not a JSON packet, could be a control message, ignore
+                    pass
             except socket.timeout:
                 continue
             except Exception as e:
@@ -414,7 +429,7 @@ def run_data_collection(run_index):
             current_time = time.time()
             while thermo_buffer and current_time - thermo_buffer[0][0] > BUFFER_RETENTION_SEC:
                 thermo_buffer.popleft()
-            while position_buffer and current_time - position_buffer[0][0] > BUFFER_RETENTION_SEC:
+            while position_buffer and current_time - get_pos_ts(position_buffer[0]) > BUFFER_RETENTION_SEC:
                 position_buffer.popleft()
                 
             if len(thermo_buffer) > 0 or len(position_buffer) > 0:
@@ -422,6 +437,11 @@ def run_data_collection(run_index):
                 
         print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches}")
         print(f"[DEBUG] Final buffer states: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+        # Print first few timestamps for manual inspection
+        print("[DEBUG] First 5 thermo timestamps:", [t[0] for t in list(thermo_buffer)[:5]])
+        print("[DEBUG] First 5 position timestamps:", [p[0] for p in list(position_buffer)[:5]])
+        if matches == 0:
+            print("[WARN] No matches found! Check timestamp alignment and template matching.")
         print(f"[DEBUG] Buffer contents - Thermo: {list(thermo_buffer)}... Position: {list(position_buffer)}...")
         
     except KeyboardInterrupt:

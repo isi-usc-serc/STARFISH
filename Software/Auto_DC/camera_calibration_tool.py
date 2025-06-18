@@ -18,10 +18,10 @@ import numpy as np
 import os
 
 ############# Calibration Parameters (edit these as needed) ###############
-GRID_SIZE_MM = 25.0           # Size of one grid square in mm
-GRID_TO_SUBJECT_MM = 56.5     # Height from grid to subject (ball) in mm
-SUBJECT_SIZE_MM = 10.0        # Diameter of the subject (ball) in mm
-SUBJECT_TO_CAMERA_MM = 205.0  # Height from top of subject to camera in mm
+GRID_SIZE_MM         = 25.0     # Size of one grid square in mm
+GRID_TO_SUBJECT_MM   = 56.5     # Height from grid to subject (ball) in mm
+SUBJECT_SIZE_MM      = 10.0     # Diameter of the subject (ball) in mm
+SUBJECT_TO_CAMERA_MM = 205.0    # Height from top of subject to camera in mm
 
 CALIB_DIR = os.path.join(os.path.dirname(__file__), "calibration_data")
 if not os.path.exists(CALIB_DIR):
