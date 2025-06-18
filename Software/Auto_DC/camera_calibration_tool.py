@@ -208,8 +208,8 @@ def main():
             upper = np.clip(max_hsv + margin, [0, 0, 0], [179, 255, 255]).astype(int)
             print(f"[INFO] Auto-detected HSV range: lower={tuple(lower)}, upper={tuple(upper)}")
             with open(calib_path, "a") as f:
-                f.write(f"hsv_lower = {tuple(lower)}\n")
-                f.write(f"hsv_upper = {tuple(upper)}\n")
+                f.write(f"hsv_lower = ({int(lower[0])}, {int(lower[1])}, {int(lower[2])})\n")
+                f.write(f"hsv_upper = ({int(upper[0])}, {int(upper[1])}, {int(upper[2])})\n")
     else:
         print("[INFO] Skipping template training.")
 

@@ -35,7 +35,7 @@ from daqhats_utils import select_hat_device
 PC_IP = '192.168.0.102'        # Update with current Host PC's IP address
 PC_PORT = 5005
 
-SMA_GPIO_PIN = 18
+SMA_GPIO_PIN = 16
 
 DEBUG = True                   # Set to False to reduce debug output
 

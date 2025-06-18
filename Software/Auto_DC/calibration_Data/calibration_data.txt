@@ -1,9 +1,11 @@
-pixels_per_mm_grid = 5.572073
-pixels_per_mm_ball = 7.203895
+pixels_per_mm_grid = 2.287794
+pixels_per_mm_ball = 2.957790
 grid_to_camera_mm = 271.50
 ball_to_camera_mm = 210.00
-calibration_points = (123, 134), (104, 272)
-real_dist_mm = 25.00
-num_squares = 1.0
+calibration_points = (236, 301), (342, 258)
+real_dist_mm = 50.00
+num_squares = 2.0
 camera_id = 0
 template_files = template_1.png,template_2.png,template_3.png
+hsv_lower = (179, 246, 2)
+hsv_upper = (179, 9, 242)
