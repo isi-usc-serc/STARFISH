@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import re
+import csv
 
 # Path to data directory
 DATA_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Thermo_Position_Data"
@@ -28,6 +29,7 @@ all_temp = []
 all_trial = []
 all_sma = []
 all_titles = []
+
 
 for run_idx, csv_path in enumerate(csv_files, 1):
     df = pd.read_csv(csv_path)
@@ -54,7 +56,7 @@ for run_idx, csv_path in enumerate(csv_files, 1):
     x0, y0 = first_row["x"], first_row["y"]
     displacement = np.sqrt((df["x"] - x0) ** 2 + (df["y"] - y0) ** 2)
     temp = df["tc1"]
-    trial = np.full(displacement.shape, run_idx, dtype=int)  # Ensure integer trial numbers
+    trial = np.full_like(displacement, run_idx, dtype=float)
     sma = df["sma_active"].astype(bool)
     all_displacement.append(displacement)
     all_temp.append(temp)
@@ -75,11 +77,11 @@ if all_displacement:
     ax = fig.add_subplot(111, projection='3d')
     for c in [True, False]:
         mask = sma == c
-        ax.scatter(disp[mask], trial[mask], temp[mask],
+        ax.scatter(disp[mask], temp[mask], trial[mask],
                    c='red' if c else 'blue', label='SMA ON' if c else 'SMA OFF', marker='o', alpha=0.7)
     ax.set_xlabel('Displacement (mm)')
-    ax.set_ylabel('Trial Number')
-    ax.set_zlabel('Temperature (°C)')
+    ax.set_ylabel('Temperature (°C)')
+    ax.set_zlabel('Trial Number')
     plt.title(all_titles[0] if all_titles else 'SMA Characterization')
     ax.legend()
     plt.tight_layout()

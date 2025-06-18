@@ -7,8 +7,11 @@
 # program.
 
 # connect to virtual environment by: 
-# > source venv/bin/activate
-
+#  > source venv/bin/activate
+#
+# Created on Wed Jun 11 17:33:49 2025
+#
+# @author: BillyChrist
 # """
 
 #!/usr/bin/env python3
@@ -29,17 +32,16 @@ sys.path.append('/home/starfish2/STARFISH/Thermal/daqhats_custom_stuff/examples/
 from daqhats_utils import select_hat_device
 
 ################################ CONFIGURATION ################################
-PC_IP = '192.168.0.102'  # Update with current Host PC's IP address
+PC_IP = '192.168.0.102'        # Update with current Host PC's IP address
 PC_PORT = 5005
 
 SMA_GPIO_PIN = 18
 
-DEBUG = True             # Set to False to reduce debug output
+DEBUG = True                   # Set to False to reduce debug output
 
-# Error handling configuration
-MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
-error_count = 0  # Counter for consecutive errors
+MAX_CONSECUTIVE_ERRORS = 10    # Exit after this many consecutive errors
 
+########################## Helper and Cleanup Functions #######################
 def cleanup_and_exit():
     """Clean up resources and exit the program."""
     print("[INFO] Cleaning up resources before exit...")
@@ -52,6 +54,7 @@ def cleanup_and_exit():
     print("[INFO] Cleanup complete. Exiting.")
     os._exit(1)
 
+error_count = 0                # Counter for consecutive errors, (start at 0)
 def read_socket_line():
     """Read a line from the socket with proper error handling."""
     global error_count, client
@@ -70,8 +73,8 @@ def read_socket_line():
         print(f"[ERROR] Socket read error: {e}")
         return None
 
+# If connection fails, retry connection and send data
 def send_with_retry(data, max_retries=3):
-    """Send data with retry logic."""
     global error_count, client
     for attempt in range(max_retries):
         try:
@@ -196,7 +199,7 @@ def data_collection_loop(run_index):
                 "temperatures_C": temps,
                 "sma_active": sma_active
             }
-
+            # Debugging messages for packet handling
             try:
                 if DEBUG:
                     print("[DEBUG] Sending packet...")
@@ -221,8 +224,8 @@ def data_collection_loop(run_index):
             GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
             break
 
+# Handle sync request from host
 def handle_sync():
-    """Handle sync request from host."""
     try:
         # Send current Unix timestamp
         sync_time = time.time()
@@ -258,6 +261,7 @@ try:
                 print("[WARN] Timeout waiting for 'sync' from host. Check host connection or sync logic.")
             finally:
                 client.settimeout(None)  # Reset timeout
+
             # Continue with lead-in and data collection as before
             print(f"[INFO] Lead-in: waiting {LEAD_TIME} seconds before starting run {run_index + 1}...")
             lead_start = time.time()
@@ -270,6 +274,7 @@ try:
             print("[INFO] Received stop command from host. Exiting.")
             should_exit = True
             break
+
 except KeyboardInterrupt:
     print("\n[INFO] Stopping script.")
 finally:

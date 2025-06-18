@@ -6,15 +6,13 @@
 
 # Note: Run this 'listener' program before starting the client program.
 
-# Created on Wed Jun 11 17:33:49 2025
-# @author: BillyChrist
-
 # To run the software, run the following commands to activate the virtual environment: 
 #  > cd "C:\Users\Owner\Desktop\SERC\STARFISH Project\Software\STARFISH"
 #  > & "venv\Scripts\Activate.ps1"    (in VScode terminal)
-
-# Pi's current ip address: 
-
+#
+# Created on Wed Jun 11 17:33:49 2025
+#
+# @author: BillyChrist
 # """
 
 # === Import libraries ===
@@ -30,6 +28,7 @@ from collections import deque
 import threading
 import sys
 import select
+import numpy as np
 
 ############################ Characterization Parameters #######################
 Volts   = 5.0      # volts
@@ -55,6 +54,7 @@ ALIGNMENT_WINDOW_MS  = 100  # ms, for matching position and temperature data
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
 POSITION_BUFFER_SIZE = 100  # Host data buffer size
+time_offset = 0.0           # Time offset between Pi and Host clocks
 
 # Cleanup interval and retention
 CLEANUP_INTERVAL     = 0.5  # seconds, how often to clean up old data
@@ -70,7 +70,7 @@ PULSE_DURATION = 1.5        # seconds
 SEND_INTERVAL  = 0.25       # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
-NUM_RUNS = 1
+NUM_RUNS = 10
 INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
@@ -79,6 +79,7 @@ DEBUG = True                # Set to False to suppress debug output
 # Error handling configuration
 MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
 error_count = 0  # Counter for consecutive errors
+
 
 
 #################################### SETUP ####################################
@@ -157,8 +158,59 @@ def detect_position(frame):
         return cx, cy
     return None, None
 
+################### Calibration and Template Loading ###########################
+def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
+    calib_path = os.path.join(calib_dir, "calibration_data.txt")
+    pixels_per_mm = None
+    template_files = []
+    with open(calib_path, "r") as f:
+        for line in f:
+            if line.startswith("pixels_per_mm_ball"):
+                pixels_per_mm = float(line.split("=")[1].strip())
+            if line.startswith("template_files"):
+                files = line.split("=")[1].strip()
+                template_files = [os.path.join(calib_dir, fn.strip()) for fn in files.split(",") if fn.strip()]
+    if pixels_per_mm is None:
+        raise ValueError("pixels_per_mm_ball not found in calibration file.")
+    return pixels_per_mm, template_files
+
+def load_templates(template_files):
+    templates = []
+    for fn in template_files:
+        temp = cv2.imread(fn)
+        if temp is not None:
+            templates.append(temp)
+        else:
+            print(f"[WARN] Could not load template: {fn}")
+    return templates
+
+# Template-based position detection
+def detect_position_with_templates(frame, templates):
+    best_val = -1
+    best_loc = None
+    best_temp = None
+    for temp in templates:
+        if frame.shape[0] < temp.shape[0] or frame.shape[1] < temp.shape[1]:
+            continue
+        res = cv2.matchTemplate(frame, temp, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+        if max_val > best_val:
+            best_val = max_val
+            best_loc = max_loc
+            best_temp = temp
+    if best_loc is not None and best_temp is not None:
+        h, w = best_temp.shape[:2]
+        center = (best_loc[0] + w//2, best_loc[1] + h//2)
+        return center, best_val
+    return None, None
+
+# Load calibration and templates at startup
+pixels_per_mm, template_files = load_calibration()
+templates = load_templates(template_files)
+
+# Update capture_position to use template matching
 def capture_position():
-    """Capture position data from all cameras."""
+    """Capture position data from all cameras using template matching."""
     top_x, top_y = None, None
     z_positions = []
     for idx, cam in enumerate(cams):
@@ -166,13 +218,20 @@ def capture_position():
         if not ret:
             z_positions.append(None)
             continue
-        x, y = detect_position(frame)
-        if idx == 0:
-            top_x, top_y = x, y
+        # Use template matching for position detection
+        center, match_val = detect_position_with_templates(frame, templates)
+        if center is not None:
+            x, y = center
+            # Convert to mm using calibration
+            x_mm = x / pixels_per_mm
+            y_mm = y / pixels_per_mm
         else:
-            z_positions.append(y if y is not None else None)
-    z_avg = round(sum(z for z in z_positions if z is not None) / max(len([z 
-            for z in z_positions if z is not None]), 1), 2)
+            x_mm, y_mm = None, None
+        if idx == 0:
+            top_x, top_y = x_mm, y_mm
+        else:
+            z_positions.append(y_mm if y_mm is not None else None)
+    z_avg = round(sum(z for z in z_positions if z is not None) / max(len([z for z in z_positions if z is not None]), 1), 2)
     from datetime import timezone
     return datetime.now(timezone.utc).isoformat(), top_x, top_y, z_avg
 
@@ -190,7 +249,7 @@ def recv_temp_packet():
         temps["sma_active"] = pkt.get("sma_active", "")
         ts = parser.isoparse(timestamp)
         # Adjust Pi timestamp using calculated offset
-        ts = ts - timedelta(seconds=rtt_offset)
+        ts = ts - timedelta(seconds=time_offset)  # Use time_offset instead of rtt_offset
         return ts, temps
     except Exception as e:
         if not isinstance(e, socket.timeout):
@@ -198,220 +257,180 @@ def recv_temp_packet():
         return None, None
 
 ################################ DATA COLLECTION ##############################
+thermo_buffer   = deque(maxlen=THERMO_BUFFER_SIZE)
+position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
+
 def run_data_collection(run_index):
-    # 1. Wait for 'ready' from Pi
-    print(f"[INFO] Waiting for 'ready' from Pi before starting run {run_index + 1}...")
-    ready_timeout = 10  # seconds
-    while True:
-        rlist, _, _ = select.select([conn], [], [], ready_timeout)
-        if rlist:
-            msg = read_socket_line()
-            if msg is None:
-                continue
-            print(f"[DEBUG] Received message during handshake: '{msg}'")
-            if msg.lower() == "ready":
-                print(f"[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
-                break
-            else:
-                print(f"[WARN] Unexpected message during handshake: '{msg}'")
-        else:
-            print(f"[WARN] Timeout waiting for 'ready' from Pi. Retrying...")
-
-    # 2. Pre-match sync step
-    print(f"[INFO] Sending 'sync' to Pi and capturing pre-match position sample...")
-    max_sync_attempts = 3
-    sync_success = False
-    time_offset = 0  # Default offset
-    for attempt in range(max_sync_attempts):
-        # Send sync and record local time
-        sync_send_time = time.time()
-        conn.sendall(b"sync\n")
-        
-        # Try to get a valid position sample
-        for _ in range(5):  # Try up to 5 times to get a valid sample
-            ts_pos_str, x, y, z = capture_position()
-            if x is not None and y is not None and z is not None:
-                print(f"[INFO] Pre-match position sample captured")
-                sync_success = True
-                break
-            time.sleep(0.1)  # Short delay between attempts
-        if sync_success:
-            break
-        print(f"[WARN] Sync attempt {attempt + 1} failed. Retrying...")
-        time.sleep(0.5)  # Delay between sync attempts
-    if not sync_success:
-        print("[ERROR] Failed to get valid position sample during pre-match sync.")
-        return
-
-    # Wait for sync response from Pi with timeout
-    sync_timeout = 10  # seconds
-    rlist, _, _ = select.select([conn], [], [], sync_timeout)
-    if rlist:
-        pi_sync_msg = read_socket_line()
-        print(f"[DEBUG] Raw sync message from Pi: '{pi_sync_msg}'")
-        if pi_sync_msg.startswith("sync_ts:"):
-            try:
-                # Extract Pi's timestamp and calculate offset
-                pi_ts_str = pi_sync_msg.split(":", 1)[1]
-                pi_ts = float(pi_ts_str)  # Pi sends Unix timestamp
-                host_ts = time.time()
-                rtt = host_ts - sync_send_time
-                print(f"[INFO] Measured RTT: {rtt*1000:.1f} ms")
-                
-                # Calculate offset using midpoint of RTT
-                midpoint = sync_send_time + rtt/2
-                time_offset = pi_ts - midpoint
-                print(f"[INFO] Calculated time offset (Pi - Host): {time_offset*1000:.1f} ms")
-                
-                if abs(time_offset*1000) > 100:
-                    print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
-            except Exception as e:
-                print(f"[ERROR] Failed to parse Pi sync timestamp: {e}")
-                print("[ERROR] Aborting run due to failed sync.")
-                return
-        else:
-            print("[WARN] Received unexpected message from Pi during pre-match sync.")
-            print("[ERROR] Aborting run due to failed sync.")
-            return
-    else:
-        print("[WARN] Timeout waiting for Pi's sync response. Check Pi connection or sync logic.")
-        print("[ERROR] Aborting run due to failed sync.")
-        return
-
-    # 3. Lead-in delay to synchronize with Pi (prime position buffer)
-    print(f"[INFO] Waiting for lead-in time ({LEAD_TIME} seconds) to synchronize with Pi...")
-    position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
-    lead_start = time.time()
-    while time.time() - lead_start < LEAD_TIME:
-        current_time = time.time()  # Define current_time here
-        ts_pos_str, x, y, z = capture_position()
-        if x is not None and y is not None and z is not None:
-            position_buffer.append((current_time, x, y, z))
-        time.sleep(POSITION_SAMPLE_RATE)
-    print(f"[INFO] Lead-in complete. Sending 'trigger' to Pi and starting main data collection loop.")
-    trigger_time = time.time()  # Record the trigger time
-    conn.sendall(b"trigger")
-
-    # 4. Main data collection loop
-    thermo_buffer = deque(maxlen=THERMO_BUFFER_SIZE)
-    tolerance = ALIGNMENT_WINDOW_MS / 1000.0  # Convert to seconds
-    last_cleanup_time = time.time()
-    csv_path = get_csv_path(run_index)
+    global thermo_buffer, position_buffer, time_offset
+    
+    print(f"\n[DEBUG] Starting run {run_index + 1}")
+    
+    # Initialize buffers for this run
+    thermo_buffer.clear()
+    position_buffer.clear()
+    time_offset = 0.0
+    
+    print(f"[DEBUG] Initial buffer states: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+    
+    # Set socket timeout for the entire run
+    conn.settimeout(0.1)  # 100ms timeout for the entire run
+    
     try:
-        with open(csv_path, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["run_index", "time_ms", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
-    except PermissionError:
-        print(f"[ERROR] Cannot write to {csv_path}. Please ensure the file is not open in another program.")
-        return
-    except Exception as e:
-        print(f"[ERROR] Failed to create CSV file: {e}")
-        return
-    matches_count = 0
-    start_time = time.time()
-    last_position_time = 0
-    pulse_start_time = None  # Will be set when Pi sends pulse start message
-    try:
-        while time.time() - start_time < INTER_RUN_DELAY:
-            check_for_manual_exit()
-            current_time = time.time()
-            
-            # a. Clean up old unmatched data
-            if current_time - last_cleanup_time > CLEANUP_INTERVAL:
-                cutoff_time = current_time - BUFFER_RETENTION_SEC
-                thermo_buffer = deque((ts, t) for ts, t in thermo_buffer if ts > cutoff_time)
-                position_buffer = deque((ts, x, y, z) for ts, x, y, z in position_buffer if ts > cutoff_time)
-                last_cleanup_time = current_time
-                if len(thermo_buffer) > 0 or len(position_buffer) > 0:
-                    print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
-            
-            # b. Receive thermocouple packet with timeout
+        # 1. Wait for 'ready' from Pi
+        print(f"[INFO] Waiting for 'ready' from Pi before starting run {run_index + 1}...")
+        while True:
             try:
-                conn.settimeout(0.1)  # 100ms timeout
                 raw = read_socket_line()
                 if raw is None:
                     continue
-                # Check for pulse start message
-                if raw.startswith("pulse_start_ts:"):
-                    pi_pulse_ts = float(raw.split(":", 1)[1])
-                    pulse_start_time = pi_pulse_ts - time_offset
-                    print(f"[INFO] SMA pulse start received from Pi, t=0 set at {pulse_start_time:.3f}")
-                    continue  # Don't process this as a data packet
-                pkt = json.loads(raw)
-                pi_timestamp = float(pkt["timestamp"])  # Pi sends Unix timestamp
-                temps = pkt.get("temperatures_C", {})
-                temps["sma_active"] = pkt.get("sma_active", "")
-                # Convert Pi timestamp to host time
-                host_timestamp = pi_timestamp - time_offset
-                thermo_buffer.append((host_timestamp, temps))
+                msg = raw.strip()
+                print(f"[DEBUG] Received message during handshake: '{msg}'")
+                if msg == 'ready':
+                    break
             except socket.timeout:
-                pass
-            except json.JSONDecodeError as e:
-                if DEBUG:
-                    print(f"[DEBUG] Failed to decode JSON packet: {e}")
-            except Exception as e:
-                if not isinstance(e, socket.timeout):
-                    print(f"[ERROR] Failed to process packet: {e}")
                 continue
+            except Exception as e:
+                print(f"[ERROR] Error during handshake: {e}")
+                return
 
-            # c. Get camera-based position data
-            if current_time - last_position_time >= POSITION_SAMPLE_RATE:
-                ts_pos_str, x, y, z = capture_position()
-                if x is not None and y is not None and z is not None:
-                    position_buffer.append((current_time, x, y, z))
-                last_position_time = current_time
-
-            # d. Match closest TC data to position timestamp
-            while thermo_buffer and position_buffer:
-                ts_t, temps = thermo_buffer[0]
-                # Find the position with the closest timestamp
-                closest_idx, min_delta = None, float('inf')
-                for i, (ts_p, x, y, z) in enumerate(position_buffer):
-                    delta = abs(ts_t - ts_p)
-                    if delta < min_delta:
-                        min_delta = delta
-                        closest_idx = i
+        print("[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
+        
+        # 2. Pre-match sync
+        print("[INFO] Sending 'sync' to Pi and capturing pre-match position sample...")
+        conn.sendall(b"sync\n")
+        
+        # Capture position sample
+        position_sample = capture_position()
+        if position_sample is None:
+            print("[ERROR] Failed to capture pre-match position sample")
+            return
+        print("[INFO] Pre-match position sample captured")
+        
+        # Get sync timestamp from Pi
+        try:
+            raw = read_socket_line()
+            if raw is None:
+                print("[ERROR] No sync response from Pi")
+                return
+            msg = raw.strip()
+            print(f"[DEBUG] Raw sync message from Pi: '{msg}'")
+            
+            if not msg.startswith('sync_ts:'):
+                print(f"[ERROR] Invalid sync message format: {msg}")
+                return
                 
-                # Only match if within tolerance and position data is valid
-                if closest_idx is not None and min_delta <= tolerance:
-                    ts_p, x, y, z = position_buffer[closest_idx]
-                    if x is not None and y is not None and z is not None:
-                        if DEBUG:
-                            print(f"[DEBUG] Thermo ts: {ts_t:.3f}, Closest position ts: {ts_p:.3f}, Delta: {min_delta*1000:.1f} ms")
-                        ch = [temps.get(f"ch{i}", "") for i in range(4)]
-                        sma_state = temps.get("sma_active", "")
-                        try:
-                            with open(csv_path, mode='a', newline='') as file:
-                                writer = csv.writer(file)
-                                # Use pulse_start_time for t=0 if available
-                                if pulse_start_time is not None:
-                                    relative_ms = int((ts_t - pulse_start_time) * 1000)
-                                else:
-                                    relative_ms = int((ts_t - trigger_time + LEAD_TIME) * 1000)
-                                writer.writerow([run_index + 1, relative_ms, x, y, z] + ch + [sma_state])
-                            matches_count += 1
-                        except Exception as e:
-                            print(f"[ERROR] Failed to write to CSV: {e}")
-                            continue
-                        # Remove matched entries
-                        thermo_buffer.popleft()
-                        position_buffer.remove((ts_p, x, y, z))
+            pi_ts = float(msg.split(':')[1])
+            host_ts = time.time()
+            # Convert position_sample[0] (ISO string) to float timestamp
+            host_pos_ts = parser.isoparse(position_sample[0]).timestamp()
+            rtt = (host_ts - host_pos_ts) * 1000  # Convert to ms
+            time_offset = pi_ts - host_ts
+            
+            print(f"[INFO] Measured RTT: {rtt:.1f} ms")
+            print(f"[INFO] Calculated time offset (Pi - Host): {time_offset*1000:.1f} ms")
+            
+            if abs(time_offset) > 0.1:  # 100ms threshold
+                print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to process sync response: {e}")
+            return
+
+        # 3. Lead-in time
+        print("[INFO] Waiting for lead-in time (2.0 seconds) to synchronize with Pi...")
+        time.sleep(2.0)
+        print("[INFO] Lead-in complete. Sending 'trigger' to Pi and starting main data collection loop.")
+        conn.sendall(b"trigger\n")
+        
+        # 4. Main data collection loop
+        matches = 0
+        sma_start_time = None
+        
+        # Helper to convert position_buffer timestamp to float
+        def get_pos_ts(pos):
+            return parser.isoparse(pos[0]).timestamp()
+
+        while True:
+            # a. Capture position data
+            position_sample = capture_position()
+            if position_sample is not None:
+                position_buffer.append(position_sample)
+            
+            # b. Receive thermocouple packet with timeout
+            try:
+                raw = read_socket_line()
+                if raw is None:
+                    continue
+                    
+                msg = raw.strip()
+                
+                # Check for SMA pulse start
+                if msg.startswith('sma_start:'):
+                    sma_start_time = float(msg.split(':')[1])
+                    print(f"[INFO] SMA pulse start received from Pi, t=0 set at {sma_start_time}")
+                    continue
+                    
+                # Process temperature data
+                if msg.startswith('temp:'):
+                    try:
+                        data = json.loads(msg[5:])
+                        thermo_ts = data['timestamp']
+                        thermo_buffer.append((thermo_ts, data))
+                        
+                        # Find closest position sample
+                        if position_buffer:
+                            closest_pos = min(position_buffer, key=lambda x: abs(get_pos_ts(x) - thermo_ts))
+                            delta = abs(get_pos_ts(closest_pos) - thermo_ts) * 1000  # Convert to ms
+                            print(f"[DEBUG] Thermo ts: {thermo_ts:.3f}, Closest position ts: {closest_pos[0]:.3f}, Delta: {delta:.1f} ms")
+                            
+                            if delta <= ALIGNMENT_WINDOW_MS:
+                                matches += 1
+                                # Write to CSV
+                                if sma_start_time is not None:
+                                    time_ms = (thermo_ts - sma_start_time) * 1000
+                                    writer.writerow({
+                                        'time_ms': time_ms,
+                                        'x_mm': closest_pos[1][0],
+                                        'y_mm': closest_pos[1][1],
+                                        'temp_ch0': data['ch0'],
+                                        'temp_ch1': data['ch1'],
+                                        'temp_ch2': data['ch2'],
+                                        'temp_ch3': data['ch3'],
+                                        'sma_active': data['sma_active']
+                                    })
+                                    csv_file.flush()
+                                    
+                    except json.JSONDecodeError as e:
+                        print(f"[ERROR] Failed to decode temperature data: {e}")
                         continue
+                        
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[ERROR] Error in main loop: {e}")
+                break
                 
-                # If no match found, drop the oldest entry that's too far apart
-                if position_buffer[0][0] < ts_t - tolerance:
-                    position_buffer.popleft()
-                elif thermo_buffer[0][0] < position_buffer[0][0] - tolerance:
-                    thermo_buffer.popleft()
-                else:
-                    break  # Keep both entries for now
-
-        print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches_count}")
-
+            # c. Cleanup old data
+            current_time = time.time()
+            while thermo_buffer and current_time - thermo_buffer[0][0] > BUFFER_RETENTION_SEC:
+                thermo_buffer.popleft()
+            while position_buffer and current_time - position_buffer[0][0] > BUFFER_RETENTION_SEC:
+                position_buffer.popleft()
+                
+            if len(thermo_buffer) > 0 or len(position_buffer) > 0:
+                print(f"[INFO] Buffer cleanup: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+                
+        print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches}")
+        print(f"[DEBUG] Final buffer states: thermo={len(thermo_buffer)}, position={len(position_buffer)}")
+        print(f"[DEBUG] Buffer contents - Thermo: {list(thermo_buffer)}... Position: {list(position_buffer)}...")
+        
     except KeyboardInterrupt:
-        print("\n[INFO] Data collection interrupted.")
+        print("\n[INFO] Data collection interrupted by user.")
     finally:
-        conn.settimeout(None)  # Reset timeout
+        conn.settimeout(None)  # Reset timeout to blocking mode
+        # Clear any remaining buffers
+        thermo_buffer.clear()
+        position_buffer.clear()
 
 
 ################################# MAIN LOOP ###################################
@@ -431,19 +450,60 @@ input("[READY] Press Enter to begin data collection...")
 try:
     for run_index in range(NUM_RUNS):
         check_for_manual_exit()
-        print(f"[INFO] Sending 'start dc' command for run {run_index + 1}")
+        
+        # Set up CSV file for this run
+        csv_path = get_csv_path(run_index)
+        csv_file = open(csv_path, 'w', newline='')
+        fieldnames = ['time_ms', 'x_mm', 'y_mm', 'temp_ch0', 'temp_ch1', 'temp_ch2', 'temp_ch3', 'sma_active']
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        print(f"[INFO] Starting run {run_index + 1} with CSV file: {csv_path}")
+        
         try:
-            conn.sendall(b"start dc")
+            # Send start command to Pi
+            conn.sendall(b"start dc\n")
+            print(f"[INFO] Sent 'start dc' command for run {run_index + 1}")
+            
+            # Run data collection for this run
             run_data_collection(run_index)
+            
         except (ConnectionResetError, BrokenPipeError) as e:
             print(f"[ERROR] Connection lost during run {run_index + 1}: {e}")
             break
         except Exception as e:
             print(f"[ERROR] Unexpected error during run {run_index + 1}: {e}")
             break
+        finally:
+            # Close CSV file for this run
+            csv_file.close()
+            print(f"[INFO] Closed CSV file for run {run_index + 1}")
 
+        # Only send reset if there are more runs to go
         if run_index < NUM_RUNS - 1:
-            print(f"[INFO] Starting next run...")
+            print(f"[INFO] Preparing for next run...")
+            try:
+                # Send reset command to Pi and wait for acknowledgment
+                conn.sendall(b"reset\n")
+                print("[INFO] Sent reset command to Pi")
+                
+                # Wait for acknowledgment with timeout
+                rlist, _, _ = select.select([conn], [], [], 5.0)
+                if rlist:
+                    raw = read_socket_line()
+                    if raw and raw.strip() == "reset_ack":
+                        print("[INFO] Pi acknowledged reset")
+                    else:
+                        print(f"[WARN] Unexpected response from Pi after reset: {raw}")
+                else:
+                    print("[WARN] No response from Pi after reset command")
+                    
+            except Exception as e:
+                print(f"[WARN] Failed to reset Pi: {e}")
+            
+            # Add delay between runs
+            print("[INFO] Waiting 2 seconds before next run...")
+            time.sleep(2)
 
 except KeyboardInterrupt:
     print("\n[INFO] Data collection interrupted by user.")
@@ -451,7 +511,7 @@ except Exception as e:
     print(f"[ERROR] Unexpected error: {e}")
 finally:
     try:
-        conn.sendall(b"stop")
+        conn.sendall(b"stop\n")
         print("[INFO] Sent 'stop' command to Pi.")
     except Exception as e:
         print(f"[WARN] Could not send 'stop' command: {e}")
@@ -469,19 +529,9 @@ finally:
         pass
     print("[INFO] Cleanup complete.")
 
-def calibrate_camera():
-    """
-    TODO: Implement camera calibration to convert pixel coordinates to real-world units (pixels/mm).
-    Steps may include:
-      1. Capture an image with a ruler or known reference object.
-      2. Measure the number of pixels corresponding to a known distance.
-      3. Calculate and store the scale (pixels per mm or mm per pixel).
-      4. Optionally, use OpenCV camera calibration for lens distortion correction.
-    """
-    pass
-
+# Clean up resources and exit the program.
 def cleanup_and_exit():
-    """Clean up resources and exit the program."""
+
     print("[INFO] Cleaning up resources before exit...")
     try:
         conn.sendall(b"stop")
