@@ -50,7 +50,7 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 700  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 500  # ms, for matching position and temperature data
 
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
@@ -178,16 +178,19 @@ def recv_temp_packet():
 def run_data_collection(run_index):
     # 1. Wait for 'ready' from Pi
     print(f"[INFO] Waiting for 'ready' from Pi before starting run {run_index + 1}...")
+    ready_timeout = 10  # seconds
     while True:
-        try:
-            conn.settimeout(10)
+        rlist, _, _ = select.select([conn], [], [], ready_timeout)
+        if rlist:
             msg = conn_file.readline().strip()
+            print(f"[DEBUG] Received message during handshake: '{msg}'")
             if msg.lower() == "ready":
                 print(f"[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
                 break
-        except socket.timeout:
-            print("[WARN] Timeout waiting for 'ready' from Pi. Retrying...")
-
+            else:
+                print(f"[WARN] Unexpected message during handshake: '{msg}'")
+        else:
+            print(f"[WARN] Timeout waiting for 'ready' from Pi. Retrying...")
     # 2. Pre-match sync step
     print(f"[INFO] Sending 'sync' to Pi and capturing pre-match position sample...")
     max_sync_attempts = 3
@@ -212,33 +215,37 @@ def run_data_collection(run_index):
     if not sync_success:
         print("[ERROR] Failed to get valid position sample during pre-match sync.")
         return
-    # Optionally, receive Pi's timestamp for comparison and calculate RTT/offset
-    try:
-        conn.settimeout(2)
-        T_host_recv = datetime.now()
+    # Wait for sync response from Pi with timeout
+    sync_timeout = 10  # seconds
+    rlist, _, _ = select.select([conn], [], [], sync_timeout)
+    if rlist:
         pi_sync_msg = conn_file.readline().strip()
         print(f"[DEBUG] Raw sync message from Pi: '{pi_sync_msg}'")
         if pi_sync_msg.startswith("sync_ts:"):
             pi_ts_str = pi_sync_msg.split(":", 1)[1]
             print(f"[INFO] Pi pre-match temperature sample timestamp: {pi_ts_str}")
-            T_pi_recv = parser.isoparse(pi_ts_str).replace(tzinfo=None)
-            rtt = (T_host_recv - T_host_send).total_seconds()
-            print(f"[INFO] Measured RTT: {rtt*1000:.1f} ms")
-            offset = (T_pi_recv - (T_host_send + (T_host_recv - T_host_send)/2)).total_seconds()
-            print(f"[INFO] Calculated clock offset (Pi - Host): {offset*1000:.1f} ms")
-            rtt_offset = offset
-            if abs(offset*1000) > 100:
-                print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
+            try:
+                T_pi_recv = parser.isoparse(pi_ts_str).replace(tzinfo=None)
+                T_host_recv = datetime.now()
+                rtt = (T_host_recv - T_host_send).total_seconds()
+                print(f"[INFO] Measured RTT: {rtt*1000:.1f} ms")
+                offset = (T_pi_recv - (T_host_send + (T_host_recv - T_host_send)/2)).total_seconds()
+                print(f"[INFO] Calculated clock offset (Pi - Host): {offset*1000:.1f} ms")
+                rtt_offset = offset
+                if abs(offset*1000) > 100:
+                    print("[WARN] Pre-match offset is greater than 100ms. Check network latency or system load.")
+            except Exception as e:
+                print(f"[ERROR] Failed to parse Pi sync timestamp: {e}")
+                print("[ERROR] Aborting run due to failed sync.")
+                return
         else:
             print("[WARN] Received unexpected message from Pi during pre-match sync.")
             print("[ERROR] Aborting run due to failed sync.")
             return
-    except socket.timeout:
-        print("[WARN] Did not receive Pi's pre-match timestamp. Check Pi's connection or sync logic.")
+    else:
+        print("[WARN] Timeout waiting for Pi's sync response. Check Pi connection or sync logic.")
         print("[ERROR] Aborting run due to failed sync.")
         return
-    finally:
-        conn.settimeout(None)  # Reset timeout
 
     # 3. Lead-in delay to synchronize with Pi (prime position buffer)
     print(f"[INFO] Waiting for lead-in time ({LEAD_TIME} seconds) to synchronize with Pi...")

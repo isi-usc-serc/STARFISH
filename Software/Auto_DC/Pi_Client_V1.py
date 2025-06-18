@@ -72,47 +72,13 @@ LEAD_TIME = config.get("lead_time", 2.0) # seconds
 for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
 
-################################## LOOP #######################################
+################################## MAIN LOOP ##################################
 should_exit = False
 
-def run_data_collection(run_index):
+def data_collection_loop(run_index):
     global client, should_exit
-    # 1. Lead-in delay and buffer priming
-    # Wait for pre-match sync from host
-    print(f"[INFO] Waiting for 'sync' from host for pre-match...")
-    try:
-        client.settimeout(10)  # 10 second timeout for sync
-        msg = client.recv(1024).decode().strip()
-        if msg.lower() == "sync":
-            print("[INFO] Received 'sync' from host. Syncing clocks and sending timestamp...")
-            # Pre-match sync: record Pi's receive time and send to host
-            from datetime import timezone
-            T_pi_recv = datetime.now(timezone.utc).isoformat()
-            try:
-                client.sendall(f"sync_ts:{T_pi_recv}\n".encode())
-                print(f"[INFO] Sent sync timestamp to host: {T_pi_recv} at {datetime.datetime.now(timezone.utc).isoformat()}")
-                print("[INFO] Sync handshake complete.")
-            except Exception as e:
-                print(f"[WARN] Failed to send sync timestamp: {e}")
-        elif msg.lower() == "stop":
-            print("[INFO] Received stop command from host during pre-match. Exiting.")
-            should_exit = True
-            return
-        else:
-            print(f"[WARN] Received unexpected message from host during pre-match sync: {msg}")
-    except socket.timeout:
-        print("[WARN] Timeout waiting for 'sync' from host. Check host connection or sync logic.")
-    finally:
-        client.settimeout(None)  # Reset timeout
-    # 2. Lead-in delay and buffer priming
-    print(f"[INFO] Lead-in: waiting {LEAD_TIME} seconds before starting run {run_index + 1}...")
-    lead_start = time.time()
-    while time.time() - lead_start < LEAD_TIME:
-        # Optionally, you could prime a buffer here if needed
-        time.sleep(0.05)
-    print(f"[INFO] Lead-in complete. Sending 'ready' to host and waiting for 'trigger'...")
-    client.sendall(b"ready")
-    # 3. Wait for 'trigger' from host
+    # Lead-in is already done
+    # Wait for 'trigger' from host
     while True:
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "trigger":
@@ -122,20 +88,18 @@ def run_data_collection(run_index):
             print("[INFO] Received stop command from host during handshake. Exiting.")
             should_exit = True
             return
-    # 4. Main data collection loop (unchanged)
+    # Main data collection loop
     start_time = time.time()
     sma_active = False
     pulse_start_time = None
     last_sample_time = time.time()
     pulse_sent = False
-
     while True:
         if should_exit:
             GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
             break
         now = time.time()
         elapsed = now - start_time
-
         # Lead-in period: wait before activating SMA
         if not pulse_sent and elapsed >= LEAD_TIME:
             GPIO.output(SMA_GPIO_PIN, GPIO.HIGH)
@@ -144,14 +108,12 @@ def run_data_collection(run_index):
             pulse_sent = True
             if DEBUG:
                 print(f"[INFO] SMA pulse started at t={elapsed:.2f}s")
-
         # End SMA pulse after configured duration
         if sma_active and pulse_sent and (now - pulse_start_time >= SMA_PULSE_DURATION):
             GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
             sma_active = False
             if DEBUG:
                 print(f"[INFO] SMA pulse ended at t={elapsed:.2f}s")
-
         # Sample temperature and send to host at fixed interval
         if now >= last_sample_time:
             temps = {}
@@ -163,16 +125,13 @@ def run_data_collection(run_index):
                     temps[f"ch{ch}"] = None
                     if DEBUG:
                         print(f"[ERROR] Temp read failed for ch{ch}: {e}")
-
             timestamp = datetime.datetime.utcnow().isoformat() + "Z"
-
             packet = {
                 "run_index": run_index + 1,
                 "timestamp": timestamp,
                 "temperatures_C": temps,
                 "sma_active": sma_active
             }
-
             try:
                 if DEBUG:
                     print("[DEBUG] Sending packet...")
@@ -197,12 +156,10 @@ def run_data_collection(run_index):
                 if reconnect_attempts == 5:
                     print("[FATAL] Could not reconnect to host. Exiting.")
                     break
-
             last_sample_time += SEND_INTERVAL
             sleep_time = last_sample_time - time.time()
             if sleep_time > 0:
                 time.sleep(sleep_time)
-
         # Stop after run_time seconds
         if elapsed > RUN_TIME:
             GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
@@ -211,20 +168,51 @@ def run_data_collection(run_index):
 try:
     print("[INFO] Waiting for 'start dc' or 'stop' commands from host...")
     run_index = 0
-    while True:
+    while run_index < NUM_RUNS:
         msg = client.recv(1024).decode().strip()
         if msg.lower() == "start dc":
             print(f"[INFO] Starting data collection run {run_index + 1}...")
-            run_data_collection(run_index)
+            # Send 'ready' to host immediately
+            client.sendall(b"ready\n")
+            print("[INFO] Sent 'ready' to host. Waiting for 'sync' for pre-match...")
+            # Now wait for 'sync' from host for pre-match
+            try:
+                client.settimeout(10)  # 10 second timeout for sync
+                sync_msg = client.recv(1024).decode().strip()
+                if sync_msg.lower() == "sync":
+                    print("[INFO] Received 'sync' from host. Syncing clocks and sending timestamp...")
+                    from datetime import timezone
+                    T_pi_recv = datetime.datetime.now(timezone.utc).isoformat()
+                    try:
+                        client.sendall(f"sync_ts:{T_pi_recv}\n".encode())
+                        print(f"[INFO] Sent sync timestamp to host: {T_pi_recv} at {datetime.datetime.now(timezone.utc).isoformat()}")
+                        print("[INFO] Sync handshake complete.")
+                    except Exception as e:
+                        print(f"[WARN] Failed to send sync timestamp: {e}")
+                elif sync_msg.lower() == "stop":
+                    print("[INFO] Received stop command from host during pre-match. Exiting.")
+                    should_exit = True
+                    break
+                else:
+                    print(f"[WARN] Received unexpected message from host during pre-match sync: {sync_msg}")
+            except socket.timeout:
+                print("[WARN] Timeout waiting for 'sync' from host. Check host connection or sync logic.")
+            finally:
+                client.settimeout(None)  # Reset timeout
+            # Continue with lead-in and data collection as before
+            print(f"[INFO] Lead-in: waiting {LEAD_TIME} seconds before starting run {run_index + 1}...")
+            lead_start = time.time()
+            while time.time() - lead_start < LEAD_TIME:
+                time.sleep(0.05)
+            print(f"[INFO] Lead-in complete. Waiting for 'trigger' from host...")
+            data_collection_loop(run_index)
             run_index += 1
         elif msg.lower() == "stop":
             print("[INFO] Received stop command from host. Exiting.")
             should_exit = True
             break
-
 except KeyboardInterrupt:
     print("\n[INFO] Stopping script.")
-
 finally:
     GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
     GPIO.cleanup()
