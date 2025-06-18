@@ -50,18 +50,18 @@ LISTEN_PORT = 5005
 CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 500  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 100  # ms, for matching position and temperature data
 
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
 POSITION_BUFFER_SIZE = 100  # Host data buffer size
 
 # Cleanup interval and retention
-CLEANUP_INTERVAL     = 1.0  # seconds, how often to clean up old data
-BUFFER_RETENTION_SEC = 2.0  # seconds, how long to keep unmatched data
+CLEANUP_INTERVAL     = 0.5  # seconds, how often to clean up old data
+BUFFER_RETENTION_SEC = 1.0  # seconds, how long to keep unmatched data
 
 # Position sample rate
-POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
+POSITION_SAMPLE_RATE = 0.1  # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
 TC_CHANNELS = [0, 1, 2, 3]
@@ -283,11 +283,13 @@ def run_data_collection(run_index):
     position_buffer = deque(maxlen=POSITION_BUFFER_SIZE)
     lead_start = time.time()
     while time.time() - lead_start < LEAD_TIME:
+        current_time = time.time()  # Define current_time here
         ts_pos_str, x, y, z = capture_position()
         if x is not None and y is not None and z is not None:
             position_buffer.append((current_time, x, y, z))
         time.sleep(POSITION_SAMPLE_RATE)
     print(f"[INFO] Lead-in complete. Sending 'trigger' to Pi and starting main data collection loop.")
+    trigger_time = time.time()  # Record the trigger time
     conn.sendall(b"trigger")
 
     # 4. Main data collection loop
@@ -298,7 +300,7 @@ def run_data_collection(run_index):
     try:
         with open(csv_path, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(["run_index", "time", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
+            writer.writerow(["run_index", "time_ms", "x", "y", "z", "tc1", "tc2", "tc3", "tc4", "sma_active"])
     except PermissionError:
         print(f"[ERROR] Cannot write to {csv_path}. Please ensure the file is not open in another program.")
         return
@@ -308,6 +310,7 @@ def run_data_collection(run_index):
     matches_count = 0
     start_time = time.time()
     last_position_time = 0
+    pulse_start_time = None  # Will be set when Pi sends pulse start message
     try:
         while time.time() - start_time < INTER_RUN_DELAY:
             check_for_manual_exit()
@@ -328,6 +331,12 @@ def run_data_collection(run_index):
                 raw = read_socket_line()
                 if raw is None:
                     continue
+                # Check for pulse start message
+                if raw.startswith("pulse_start_ts:"):
+                    pi_pulse_ts = float(raw.split(":", 1)[1])
+                    pulse_start_time = pi_pulse_ts - time_offset
+                    print(f"[INFO] SMA pulse start received from Pi, t=0 set at {pulse_start_time:.3f}")
+                    continue  # Don't process this as a data packet
                 pkt = json.loads(raw)
                 pi_timestamp = float(pkt["timestamp"])  # Pi sends Unix timestamp
                 temps = pkt.get("temperatures_C", {})
@@ -345,7 +354,7 @@ def run_data_collection(run_index):
                     print(f"[ERROR] Failed to process packet: {e}")
                 continue
 
-            # c. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
+            # c. Get camera-based position data
             if current_time - last_position_time >= POSITION_SAMPLE_RATE:
                 ts_pos_str, x, y, z = capture_position()
                 if x is not None and y is not None and z is not None:
@@ -356,41 +365,46 @@ def run_data_collection(run_index):
             while thermo_buffer and position_buffer:
                 ts_t, temps = thermo_buffer[0]
                 # Find the position with the closest timestamp
-                closest_idx, min_delta = None, None
+                closest_idx, min_delta = None, float('inf')
                 for i, (ts_p, x, y, z) in enumerate(position_buffer):
                     delta = abs(ts_t - ts_p)
-                    if min_delta is None or delta < min_delta:
+                    if delta < min_delta:
                         min_delta = delta
                         closest_idx = i
-                # Only match if the closest position is valid
-                if closest_idx is not None:
-                    x, y, z = position_buffer[closest_idx][1:]
+                
+                # Only match if within tolerance and position data is valid
+                if closest_idx is not None and min_delta <= tolerance:
+                    ts_p, x, y, z = position_buffer[closest_idx]
                     if x is not None and y is not None and z is not None:
-                        if min_delta is not None and DEBUG:
-                            print(f"[DEBUG] Thermo ts: {ts_t:.3f}, Closest position ts: {position_buffer[closest_idx][0]:.3f}, Delta: {min_delta*1000:.1f} ms")
-                        if min_delta is not None and min_delta <= tolerance:
-                            # Found a match
-                            ts_p, x, y, z = position_buffer[closest_idx]
-                            ch = [temps.get(f"ch{i}", "") for i in range(4)]
-                            sma_state = temps.get("sma_active", "")
-                            try:
-                                with open(csv_path, mode='a', newline='') as file:
-                                    writer = csv.writer(file)
-                                    writer.writerow([run_index + 1, ts_t, x, y, z] + ch + [sma_state])
-                                matches_count += 1
-                            except Exception as e:
-                                print(f"[ERROR] Failed to write to CSV: {e}")
-                                continue
-                            # Remove matched entries
-                            thermo_buffer.popleft()
-                            position_buffer.remove((ts_p, x, y, z))
+                        if DEBUG:
+                            print(f"[DEBUG] Thermo ts: {ts_t:.3f}, Closest position ts: {ts_p:.3f}, Delta: {min_delta*1000:.1f} ms")
+                        ch = [temps.get(f"ch{i}", "") for i in range(4)]
+                        sma_state = temps.get("sma_active", "")
+                        try:
+                            with open(csv_path, mode='a', newline='') as file:
+                                writer = csv.writer(file)
+                                # Use pulse_start_time for t=0 if available
+                                if pulse_start_time is not None:
+                                    relative_ms = int((ts_t - pulse_start_time) * 1000)
+                                else:
+                                    relative_ms = int((ts_t - trigger_time + LEAD_TIME) * 1000)
+                                writer.writerow([run_index + 1, relative_ms, x, y, z] + ch + [sma_state])
+                            matches_count += 1
+                        except Exception as e:
+                            print(f"[ERROR] Failed to write to CSV: {e}")
                             continue
-                # No match within window, drop the oldest
-                if position_buffer[0][0] < ts_t:
+                        # Remove matched entries
+                        thermo_buffer.popleft()
+                        position_buffer.remove((ts_p, x, y, z))
+                        continue
+                
+                # If no match found, drop the oldest entry that's too far apart
+                if position_buffer[0][0] < ts_t - tolerance:
                     position_buffer.popleft()
-                else:
+                elif thermo_buffer[0][0] < position_buffer[0][0] - tolerance:
                     thermo_buffer.popleft()
-                break
+                else:
+                    break  # Keep both entries for now
 
         print(f"[INFO] Run {run_index + 1} completed. Total matches: {matches_count}")
 
