@@ -20,6 +20,7 @@ import time
 import datetime
 import RPi.GPIO as GPIO
 from daqhats import mcc134, HatIDs, HatError, TcTypes
+import os
 
 # Specify dependency path for daqhats
 import sys
@@ -34,6 +35,58 @@ PC_PORT = 5005
 SMA_GPIO_PIN = 18
 
 DEBUG = True             # Set to False to reduce debug output
+
+# Error handling configuration
+MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
+error_count = 0  # Counter for consecutive errors
+
+def cleanup_and_exit():
+    """Clean up resources and exit the program."""
+    print("[INFO] Cleaning up resources before exit...")
+    GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
+    GPIO.cleanup()
+    try:
+        client.close()
+    except:
+        pass
+    print("[INFO] Cleanup complete. Exiting.")
+    os._exit(1)
+
+def read_socket_line():
+    """Read a line from the socket with proper error handling."""
+    global error_count, client
+    try:
+        data = client.recv(1024).decode().strip()
+        if data:  # Reset error count on successful read
+            error_count = 0
+        return data
+    except socket.timeout:
+        return None
+    except Exception as e:
+        error_count += 1
+        if error_count >= MAX_CONSECUTIVE_ERRORS:
+            print(f"[FATAL] Too many consecutive errors ({error_count}). Exiting program.")
+            cleanup_and_exit()
+        print(f"[ERROR] Socket read error: {e}")
+        return None
+
+def send_with_retry(data, max_retries=3):
+    """Send data with retry logic."""
+    global error_count, client
+    for attempt in range(max_retries):
+        try:
+            client.sendall(data)
+            error_count = 0  # Reset error count on successful send
+            return True
+        except Exception as e:
+            error_count += 1
+            if error_count >= MAX_CONSECUTIVE_ERRORS:
+                print(f"[FATAL] Too many consecutive errors ({error_count}). Exiting program.")
+                cleanup_and_exit()
+            print(f"[ERROR] Send attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # Wait before retry
+    return False
 
 ################################## SETUP ######################################
 # GPIO Setup
@@ -80,7 +133,9 @@ def data_collection_loop(run_index):
     # Lead-in is already done
     # Wait for 'trigger' from host
     while True:
-        msg = client.recv(1024).decode().strip()
+        msg = read_socket_line()
+        if msg is None:
+            continue
         if msg.lower() == "trigger":
             print("[INFO] Received 'trigger' from host. Starting data collection.")
             break
@@ -135,27 +190,16 @@ def data_collection_loop(run_index):
             try:
                 if DEBUG:
                     print("[DEBUG] Sending packet...")
-                client.sendall((json.dumps(packet) + '\n').encode())
+                if not send_with_retry((json.dumps(packet) + '\n').encode()):
+                    print("[ERROR] Failed to send packet after retries")
+                    should_exit = True
+                    break
                 if DEBUG:
                     print(f"[INFO] Sent: {packet}")
             except Exception as e:
                 print(f"[ERROR] Failed to send packet to host: {e}")
-                # Try to reconnect
-                reconnect_attempts = 0
-                while reconnect_attempts < 5:
-                    try:
-                        time.sleep(2)
-                        client.close()
-                        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        client.connect((PC_IP, PC_PORT))
-                        print(f"[INFO] Reconnected to PC at {PC_IP}:{PC_PORT}")
-                        break
-                    except Exception as e2:
-                        print(f"[ERROR] Reconnect attempt {reconnect_attempts+1} failed: {e2}")
-                        reconnect_attempts += 1
-                if reconnect_attempts == 5:
-                    print("[FATAL] Could not reconnect to host. Exiting.")
-                    break
+                should_exit = True
+                break
             last_sample_time += SEND_INTERVAL
             sleep_time = last_sample_time - time.time()
             if sleep_time > 0:

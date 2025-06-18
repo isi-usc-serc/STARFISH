@@ -76,6 +76,10 @@ LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
 DEBUG = True                # Set to False to suppress debug output
 
+# Error handling configuration
+MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
+error_count = 0  # Counter for consecutive errors
+
 
 #################################### SETUP ####################################
 os.makedirs(FRAME_DIR, exist_ok=True)
@@ -107,9 +111,6 @@ print(f"[INFO] Listening for Raspberry Pi on {LISTEN_IP}:{LISTEN_PORT}")
 conn, addr = server.accept()
 print(f"[INFO] Connected to Raspberry Pi at {addr}", flush=True)
 
-# Create a single file object for all line-based reads
-conn_file = conn.makefile('r')
-
 # Send configuration to Pi
 config_packet = {
     "pulse_duration": PULSE_DURATION,
@@ -122,6 +123,23 @@ config_packet = {
 }
 conn.sendall(json.dumps(config_packet).encode())
 
+def read_socket_line():
+    """Read a line from the socket with proper error handling."""
+    global error_count
+    try:
+        data = conn.recv(1024).decode().strip()
+        if data:  # Reset error count on successful read
+            error_count = 0
+        return data
+    except socket.timeout:
+        return None
+    except Exception as e:
+        error_count += 1
+        if error_count >= MAX_CONSECUTIVE_ERRORS:
+            print(f"[FATAL] Too many consecutive errors ({error_count}). Exiting program.")
+            cleanup_and_exit()
+        print(f"[ERROR] Socket read error: {e}")
+        return None
 
 ############################# CAMERA PROCESSING ###############################
 def detect_position(frame):
@@ -163,7 +181,7 @@ def capture_position():
 def recv_temp_packet():
     """Receive and decode thermocouple data."""
     try:
-        raw = conn_file.readline()
+        raw = conn.recv(1024).decode().strip()
         pkt = json.loads(raw)
         timestamp = pkt["timestamp"]
         temps = pkt.get("temperatures_C", {})
@@ -182,7 +200,9 @@ def run_data_collection(run_index):
     while True:
         rlist, _, _ = select.select([conn], [], [], ready_timeout)
         if rlist:
-            msg = conn_file.readline().strip()
+            msg = read_socket_line()
+            if msg is None:
+                continue
             print(f"[DEBUG] Received message during handshake: '{msg}'")
             if msg.lower() == "ready":
                 print(f"[INFO] Received 'ready' from Pi. Proceeding with pre-match sync.")
@@ -219,7 +239,7 @@ def run_data_collection(run_index):
     sync_timeout = 10  # seconds
     rlist, _, _ = select.select([conn], [], [], sync_timeout)
     if rlist:
-        pi_sync_msg = conn_file.readline().strip()
+        pi_sync_msg = read_socket_line()
         print(f"[DEBUG] Raw sync message from Pi: '{pi_sync_msg}'")
         if pi_sync_msg.startswith("sync_ts:"):
             pi_ts_str = pi_sync_msg.split(":", 1)[1]
@@ -293,7 +313,9 @@ def run_data_collection(run_index):
             # b. Receive thermocouple packet with timeout
             try:
                 conn.settimeout(0.1)  # 100ms timeout
-                raw = conn_file.readline()
+                raw = read_socket_line()
+                if raw is None:
+                    continue
                 pkt = json.loads(raw)
                 timestamp = pkt["timestamp"]
                 temps = pkt.get("temperatures_C", {})
@@ -304,8 +326,20 @@ def run_data_collection(run_index):
                 thermo_buffer.append((ts, temps))
             except socket.timeout:
                 pass
+            except json.JSONDecodeError as e:
+                error_count += 1
+                if error_count >= MAX_CONSECUTIVE_ERRORS:
+                    print(f"[FATAL] Too many consecutive errors ({error_count}). Exiting program.")
+                    cleanup_and_exit()
+                if DEBUG:
+                    print(f"[DEBUG] Failed to decode JSON packet: {e}")
             except Exception as e:
-                print(f"[ERROR] Failed to decode packet: {e}")
+                error_count += 1
+                if error_count >= MAX_CONSECUTIVE_ERRORS:
+                    print(f"[FATAL] Too many consecutive errors ({error_count}). Exiting program.")
+                    cleanup_and_exit()
+                if not isinstance(e, socket.timeout):
+                    print(f"[ERROR] Failed to process packet: {e}")
                 continue
             # c. Get camera-based position data (only every POSITION_SAMPLE_RATE seconds)
             if current_time - last_position_time >= POSITION_SAMPLE_RATE:
@@ -428,3 +462,27 @@ def calibrate_camera():
       4. Optionally, use OpenCV camera calibration for lens distortion correction.
     """
     pass
+
+def cleanup_and_exit():
+    """Clean up resources and exit the program."""
+    print("[INFO] Cleaning up resources before exit...")
+    try:
+        conn.sendall(b"stop")
+        print("[INFO] Sent 'stop' command to Pi.")
+    except Exception as e:
+        print(f"[WARN] Could not send 'stop' command: {e}")
+    
+    for cam in cams:
+        cam.release()
+    cv2.destroyAllWindows()
+    
+    try:
+        conn.close()
+    except:
+        pass
+    try:
+        server.close()
+    except:
+        pass
+    print("[INFO] Cleanup complete. Exiting.")
+    os._exit(1)
