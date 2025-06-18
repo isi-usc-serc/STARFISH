@@ -167,6 +167,9 @@ def data_collection_loop(run_index):
             pulse_sent = True
             if DEBUG:
                 print(f"[INFO] SMA pulse started at t={elapsed:.2f}s")
+            # When the SMA pulse is triggered (right after setting sma_active = True):
+            pulse_start_msg = f"pulse_start_ts:{time.time()}"
+            send_with_retry((pulse_start_msg + "\n").encode())
 
         # End SMA pulse after configured duration
         if sma_active and pulse_sent and (now - pulse_start_time >= SMA_PULSE_DURATION):

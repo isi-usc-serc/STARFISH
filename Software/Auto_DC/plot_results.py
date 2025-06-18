@@ -22,11 +22,13 @@ DATA_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Ther
 # Find all run CSV files
 csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "*V_*A_*G_run_*.csv")))
 
+# Initialize arrays
 all_displacement = []
 all_temp = []
 all_trial = []
 all_sma = []
 all_titles = []
+
 
 for run_idx, csv_path in enumerate(csv_files, 1):
     df = pd.read_csv(csv_path)
