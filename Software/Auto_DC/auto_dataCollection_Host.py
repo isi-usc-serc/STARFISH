@@ -225,9 +225,9 @@ print(f"[DEBUG] Template files: {template_files}")
 templates = load_templates(template_files)
 print(f"[DEBUG] Number of templates loaded: {len(templates)}")
 
-# Update capture_position to use template matching
+# Update capture_position to use color mask + template matching (like calibration tool)
 def capture_position():
-    """Capture position data from all cameras using template matching."""
+    """Capture position data from all cameras using color mask + template matching (like calibration tool)."""
     top_x, top_y = None, None
     z_positions = []
     for idx, cam in enumerate(cams):
@@ -235,75 +235,61 @@ def capture_position():
         if not ret:
             z_positions.append(None)
             continue
-        # Use template matching for position detection
-        center, match_val = detect_position_with_templates(frame, templates)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # Ensure HSV bounds are in correct order
+        global hsv_lower, hsv_upper
+        if hsv_lower is not None and hsv_upper is not None:
+            hsv_lower = tuple(min(l, u) for l, u in zip(hsv_lower, hsv_upper))
+            hsv_upper = tuple(max(l, u) for l, u in zip(hsv_lower, hsv_upper))
+            lower = np.array(hsv_lower, dtype=np.uint8)
+            upper = np.array(hsv_upper, dtype=np.uint8)
+        else:
+            preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
+            lower = np.array(preset['lower'], dtype=np.uint8)
+            upper = np.array(preset['upper'], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower, upper)
+        # Morphological operations to clean up the mask
+        kernel = np.ones((5,5), np.uint8)
+        mask = cv2.erode(mask, kernel, iterations=1)
+        mask = cv2.dilate(mask, kernel, iterations=2)
+        # Find contours (blobs = connected regions of pixels)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_val = -1
+        best_loc = None
+        best_temp = None
+        best_rect = None
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w < 10 or h < 10:
+                continue  # Ignore tiny blobs
+            roi = frame[y:y+h, x:x+w]
+            for temp in templates:
+                if roi.shape[0] < temp.shape[0] or roi.shape[1] < temp.shape[1]:
+                    continue  # Skip if ROI is smaller than template
+                res = cv2.matchTemplate(roi, temp, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                if max_val > best_val:
+                    best_val = max_val
+                    best_loc = (x + max_loc[0], y + max_loc[1])
+                    best_temp = temp
+                    best_rect = (best_loc, (best_loc[0] + temp.shape[1], best_loc[1] + temp.shape[0]))
         debug_frame = frame.copy() if DEBUG else None
-        if center is not None:
-            x, y = center
-            x_mm = x / pixels_per_mm_ball
-            y_mm = y / pixels_per_mm_ball
+        if best_rect is not None:
+            # Draw rectangle and circle for debug
             if DEBUG:
-                print(f"[DEBUG] Camera {idx}: Template match at pixel=({x},{y}), mm=({x_mm:.2f},{y_mm:.2f}), match_val={match_val}")
-                cv2.circle(debug_frame, (x, y), 10, (0, 255, 0), 2)
-                # Print HSV value at detected center
-                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                # Always define lower/upper before using them
-                if hsv_lower is not None and hsv_upper is not None:
-                    hsv_lower_np = np.array(hsv_lower)
-                    hsv_upper_np = np.array(hsv_upper)
-                    hsv_range = hsv_upper_np - hsv_lower_np
-                    margin = (hsv_range * HSV_MARGIN_PERCENT).astype(int)
-                    lower = np.clip(hsv_lower_np - margin, [0, 0, 0], [179, 255, 255])
-                    upper = np.clip(hsv_upper_np + margin, [0, 0, 0], [179, 255, 255])
-                    lower = tuple(lower)
-                    upper = tuple(upper)
-                else:
-                    preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
-                    lower = preset['lower']
-                    upper = preset['upper']
-                if 0 <= y < hsv.shape[0] and 0 <= x < hsv.shape[1]:
-                    ball_hsv = hsv[y, x]
-                    print(f"[DEBUG] Ball center HSV: {ball_hsv}")
-                    print(f"[DEBUG] Is ball in range? {lower[0] <= ball_hsv[0] <= upper[0] and lower[1] <= ball_hsv[1] <= upper[1] and lower[2] <= ball_hsv[2] <= upper[2]}")
-            else:
-                x_mm, y_mm = None, None
-                if DEBUG:
-                    print(f"[DEBUG] Camera {idx}: No template match found.")
+                cv2.rectangle(debug_frame, best_rect[0], best_rect[1], (0,255,0), 2)
+                center = (best_rect[0][0] + (best_rect[1][0] - best_rect[0][0])//2,
+                          best_rect[0][1] + (best_rect[1][1] - best_rect[0][1])//2)
+                cv2.circle(debug_frame, center, 5, (0,0,255), -1)
+                print(f"[DEBUG] Camera {idx}: Template+mask match at pixel={center}, match_val={best_val:.2f}")
+            # Convert to mm
+            x_mm = (best_rect[0][0] + (best_rect[1][0] - best_rect[0][0])//2) / pixels_per_mm_ball
+            y_mm = (best_rect[0][1] + (best_rect[1][1] - best_rect[0][1])//2) / pixels_per_mm_ball
         else:
             x_mm, y_mm = None, None
             if DEBUG:
-                print(f"[DEBUG] Camera {idx}: No template match found.")
+                print(f"[DEBUG] Camera {idx}: No template+mask match found.")
         if DEBUG:
-            # Show the mask and the debug frame
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            if hsv_lower is not None and hsv_upper is not None:
-                hsv_lower_np = np.array(hsv_lower)
-                hsv_upper_np = np.array(hsv_upper)
-                hsv_range = hsv_upper_np - hsv_lower_np
-                margin = (hsv_range * HSV_MARGIN_PERCENT).astype(int)
-                # Define minimum and maximum bounds. [Hue, saturation, value] ([min], [max])
-                lower = np.clip(hsv_lower_np - margin, [0, 0, 0], [179, 255, 255])
-                upper = np.clip(hsv_upper_np + margin, [0, 0, 0], [179, 255, 255])
-                lower = tuple(lower)
-                upper = tuple(upper)
-                margin_str = str(margin)
-            else:
-                preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
-                lower = preset['lower']
-                upper = preset['upper']
-                margin_str = 'Preset'
-            print(f"[DEBUG] HSV lower: {lower}, upper: {upper}, margin: {margin_str}")
-            mask = cv2.inRange(hsv, lower, upper)
-           
-            # Debug: Print HSV at ball center and mask statistics
-            if center is not None:
-                x, y = center
-                if 0 <= y < hsv.shape[0] and 0 <= x < hsv.shape[1]:
-                    ball_hsv = hsv[y, x]
-                    print(f"[DEBUG] Ball center HSV: {ball_hsv}")
-                    print(f"[DEBUG] Is ball in range? {lower[0] <= ball_hsv[0] <= upper[0] and lower[1] <= ball_hsv[1] <= upper[1] and lower[2] <= ball_hsv[2] <= upper[2]}")
-            nonzero_pixels = cv2.countNonZero(mask)
-            print(f"[DEBUG] Mask has {nonzero_pixels} non-zero pixels out of {mask.shape[0] * mask.shape[1]} total")
             cv2.imshow(f"Camera {idx} Debug", debug_frame)
             cv2.imshow(f"Camera {idx} Mask", mask)
             cv2.waitKey(1)
