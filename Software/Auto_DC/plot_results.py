@@ -14,9 +14,7 @@ import glob
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from scipy.interpolate import griddata
-import re
 from collections import defaultdict
 
 # Path to data directory
@@ -87,7 +85,7 @@ for prefix, files in groups.items():
         colors = np.where(sma, 'red', 'blue')
 
         # Original 3D scatter plot
-        fig = plt.figure(figsize=(10, 7))
+        fig = plt.figure(figsize=(12, 7))
         ax = fig.add_subplot(111, projection='3d')
         
         # Plot scatter points
@@ -96,40 +94,49 @@ for prefix, files in groups.items():
             ax.scatter(disp[mask], trial[mask], temp[mask],
                        c='red' if c else 'blue', label='SMA ON' if c else 'SMA OFF', marker='o', alpha=0.7)
         
-        # Add connecting lines for each trial
-        print(f"[DEBUG] Adding connecting lines for {len(files)} trials...")
+        # Remove connecting lines section
+        # (No lines between points)
+
+        # Adjust aspect ratio: make 'Trial Number' axis longer
+        # This is done by setting the limits so the y-axis (trial) is visually longer
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        zlim = ax.get_zlim()
+        # Stretch the y-axis (trial) by a factor, e.g., 2x
+        y_center = (ylim[0] + ylim[1]) / 2
+        y_range = (ylim[1] - ylim[0])
+        stretch = 2.0
+        new_ylim = (y_center - (y_range * stretch) / 2, y_center + (y_range * stretch) / 2)
+        ax.set_ylim(new_ylim)
+
+        ax.set_xlabel('Displacement [mm]')
+        ax.set_ylabel('Trial Number')
+        ax.set_zlabel('Temperature [°C]')
+        plt.title(all_titles[0] if all_titles else 'SMA Characterization')
+        ax.legend()
+        plt.tight_layout()
+        plt.show()
+        
+        # 2D plots for each trial: Temperature vs Displacement
+        print(f"[DEBUG] Creating 2D plots for {len(files)} trials...")
         for run_idx in range(1, len(files) + 1):
             trial_mask = trial == run_idx
             if np.any(trial_mask):
                 trial_disp = disp[trial_mask]
                 trial_temp = temp[trial_mask]
                 trial_sma = sma[trial_mask]
-                
-                print(f"[DEBUG] Trial {run_idx}: {len(trial_disp)} points")
-                
-                # Sort by displacement to connect points in order
-                sort_idx = np.argsort(trial_disp)
-                trial_disp_sorted = trial_disp[sort_idx]
-                trial_temp_sorted = trial_temp[sort_idx]
-                trial_sma_sorted = trial_sma[sort_idx]
-                
-                # Plot lines connecting consecutive points
-                for i in range(len(trial_disp_sorted) - 1):
-                    color = 'red' if trial_sma_sorted[i] else 'blue'
-                    alpha = 0.3  # Make lines more transparent than points
-                    ax.plot([trial_disp_sorted[i], trial_disp_sorted[i+1]], 
-                           [run_idx, run_idx], 
-                           [trial_temp_sorted[i], trial_temp_sorted[i+1]], 
-                           c=color, alpha=alpha, linewidth=1)
-        
-        ax.set_xlabel('Displacement (mm)')
-        ax.set_ylabel('Trial Number')
-        ax.set_zlabel('Temperature (°C)')
-        plt.title(all_titles[0] if all_titles else 'SMA Characterization')
-        ax.legend()
-        plt.tight_layout()
-        plt.show()
-        
+
+                fig, ax = plt.subplots(figsize=(8, 5))
+                # Plot points, color by SMA ON/OFF
+                ax.scatter(trial_disp[trial_sma], trial_temp[trial_sma], color='red', label='SMA ON', alpha=0.7)
+                ax.scatter(trial_disp[~trial_sma], trial_temp[~trial_sma], color='blue', label='SMA OFF', alpha=0.7)
+                ax.set_xlabel('Displacement [mm]')
+                ax.set_ylabel('Temperature [°C]')
+                ax.set_title(f'{format_setup_title(prefix)} Run {run_idx}')
+                ax.legend()
+                fig.tight_layout()
+                plt.show()
+
         # Surface plots for each trial
         print(f"[DEBUG] Creating surface plots for {len(files)} trials...")
         for run_idx in range(1, len(files) + 1):
@@ -138,16 +145,14 @@ for prefix, files in groups.items():
                 trial_disp = disp[trial_mask]
                 trial_temp = temp[trial_mask]
                 trial_sma = sma[trial_mask]
-                
                 print(f"[DEBUG] Creating surface plot for trial {run_idx} with {len(trial_disp)} points")
                 
                 # Create time array for this trial (assuming uniform sampling)
                 trial_time = np.linspace(0, len(trial_disp)-1, len(trial_disp))
                 
                 # Create surface plot
-                fig = plt.figure(figsize=(12, 8))
-                ax = fig.add_subplot(111, projection='3d')
-                
+                # fig = plt.figure(figsize=(12, 8))
+                # ax = fig.add_subplot(111, projection='3d')
                 # Create grid for surface interpolation
                 xi = np.linspace(trial_disp.min(), trial_disp.max(), 50)
                 yi = np.linspace(trial_time.min(), trial_time.max(), 50)
@@ -156,39 +161,32 @@ for prefix, files in groups.items():
                 # Interpolate temperature values for surface
                 points = np.column_stack((trial_disp, trial_time))
                 zi_grid = griddata(points, trial_temp, (xi_grid, yi_grid), method='linear')
-                
-                # Plot surface
-                surf = ax.plot_surface(xi_grid, yi_grid, zi_grid, 
-                                     cmap='viridis', alpha=0.7, 
-                                     linewidth=0, antialiased=True)
-                
-                # Plot original data points on surface
-                ax.scatter(trial_disp, trial_time, trial_temp, 
-                          c='red' if trial_sma[0] else 'blue', 
-                          s=50, alpha=0.8, edgecolors='black')
-                
-                # Color code points by SMA status
+                # Plot surface (DISABLED)
+                # surf = ax.plot_surface(xi_grid, yi_grid, zi_grid, 
+                #                      cmap='viridis', alpha=0.7, 
+                #                      linewidth=0, antialiased=True)
+                # Plot original data points on surface (DISABLED)
+                # ax.scatter(trial_disp, trial_time, trial_temp, 
+                #           c='red' if trial_sma[0] else 'blue', 
+                #           s=50, alpha=0.8, edgecolors='black')
+                # Color code points by SMA status (DISABLED)
                 sma_on_mask = trial_sma
                 sma_off_mask = ~trial_sma
-                
-                if np.any(sma_on_mask):
-                    ax.scatter(trial_disp[sma_on_mask], trial_time[sma_on_mask], trial_temp[sma_on_mask],
-                              c='red', s=50, alpha=0.8, edgecolors='black', label='SMA ON')
-                if np.any(sma_off_mask):
-                    ax.scatter(trial_disp[sma_off_mask], trial_time[sma_off_mask], trial_temp[sma_off_mask],
-                              c='blue', s=50, alpha=0.8, edgecolors='black', label='SMA OFF')
-                
-                ax.set_xlabel('Displacement (mm)')
-                ax.set_ylabel('Time (sample index)')
-                ax.set_zlabel('Temperature (°C)')
-                ax.set_title(f'Surface Plot - {format_setup_title(prefix)} Run {run_idx}')
-                
-                # Add colorbar
-                fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
-                
-                ax.legend()
-                plt.tight_layout()
-                plt.show()
+                # if np.any(sma_on_mask):
+                #     ax.scatter(trial_disp[sma_on_mask], trial_time[sma_on_mask], trial_temp[sma_on_mask],
+                #               c='red', s=50, alpha=0.8, edgecolors='black', label='SMA ON')
+                # if np.any(sma_off_mask):
+                #     ax.scatter(trial_disp[sma_off_mask], trial_time[sma_off_mask], trial_temp[sma_off_mask],
+                #               c='blue', s=50, alpha=0.8, edgecolors='black', label='SMA OFF')
+                # ax.set_xlabel('Displacement [mm]')
+                # ax.set_ylabel('Time [s]')
+                # ax.set_zlabel('Temperature [°C]')
+                # ax.set_title(f'{format_setup_title(prefix)} Run {run_idx}')
+                # Add colorbar (DISABLED)
+                # fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+                # ax.legend()
+                # plt.tight_layout()
+                # plt.show()
     else:
         print(f"[ERROR] No valid data found to plot for {prefix}.")
 
