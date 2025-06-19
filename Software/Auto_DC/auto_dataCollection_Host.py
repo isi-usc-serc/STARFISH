@@ -247,6 +247,20 @@ def capture_position():
                 cv2.circle(debug_frame, (x, y), 10, (0, 255, 0), 2)
                 # Print HSV value at detected center
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                # Always define lower/upper before using them
+                if hsv_lower is not None and hsv_upper is not None:
+                    hsv_lower_np = np.array(hsv_lower)
+                    hsv_upper_np = np.array(hsv_upper)
+                    hsv_range = hsv_upper_np - hsv_lower_np
+                    margin = (hsv_range * HSV_MARGIN_PERCENT).astype(int)
+                    lower = np.clip(hsv_lower_np - margin, [0, 0, 0], [179, 255, 255])
+                    upper = np.clip(hsv_upper_np + margin, [0, 0, 0], [179, 255, 255])
+                    lower = tuple(lower)
+                    upper = tuple(upper)
+                else:
+                    preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
+                    lower = preset['lower']
+                    upper = preset['upper']
                 if 0 <= y < hsv.shape[0] and 0 <= x < hsv.shape[1]:
                     ball_hsv = hsv[y, x]
                     print(f"[DEBUG] Ball center HSV: {ball_hsv}")
