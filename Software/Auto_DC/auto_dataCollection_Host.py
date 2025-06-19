@@ -31,10 +31,9 @@ import select
 import numpy as np
 
 ############################ Characterization Parameters #######################
-Volts   = 3.3      # volts
-Current = 0.0      # amperes
-Load    = 250      # grams
-
+Volts   = 6.0      # volts
+Current = 1.5      # amperes
+Load    = 100      # grams
 
 ################################## CONFIGURATION ##############################
 # Set data logging directory
@@ -46,10 +45,10 @@ LISTEN_IP = "0.0.0.0"  # listens for anything trying to connect
 LISTEN_PORT = 5005
 
 # Define camera IDs in use
-CAMERA_IDS = [1] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
+CAMERA_IDS = [0] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 300  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 400  # ms, for matching position and temperature data
 
 # Buffer sizes
 THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
@@ -66,12 +65,12 @@ POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
 # Thermocouple configuration for the Pi
 TC_CHANNELS    = [0]        # [0, 1, 2, 3], 4 max channels
 TC_TYPE = "J"               # Thermocouple type: J, K, etc.
-PULSE_DURATION = 1.5        # seconds
+PULSE_DURATION = 50.00      # seconds
 SEND_INTERVAL  = 0.25       # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 10
-INTER_RUN_DELAY = 20        # Interval time between pulses in seconds
+INTER_RUN_DELAY = 100       # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
 
 # Debug mode. Set to False to suppress debug output
@@ -81,7 +80,15 @@ DEBUG = True
 MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
 error_count = 0  # Counter for consecutive errors
 
-
+# Default HSV color presets for different ball colors
+HSV_PRESETS = {
+    'red':    {'lower': (0, 100, 100),   'upper': (10, 255, 255)},
+    'green':  {'lower': (40, 50, 50),    'upper': (80, 255, 255)},
+    'yellow': {'lower': (20, 100, 100),  'upper': (30, 255, 255)},
+    'blue':   {'lower': (100, 150, 0),   'upper': (140, 255, 255)},
+}
+DEFAULT_BALL_COLOR = 'red'  # Change as needed
+HSV_MARGIN_PERCENT = 0.10   # 10% margin
 
 #################################### SETUP ####################################
 os.makedirs(FRAME_DIR, exist_ok=True)
@@ -150,6 +157,7 @@ def detect_position(frame):
     lower = hsv_lower if hsv_lower is not None else (0, 100, 100)
     upper = hsv_upper if hsv_upper is not None else (10, 255, 255)
     mask = cv2.inRange(hsv, lower, upper)
+    # No hardcoded color range should overwrite the above
     moments = cv2.moments(mask)
     if moments["m00"] != 0:
         cx = int(moments["m10"] / moments["m00"])
@@ -160,14 +168,14 @@ def detect_position(frame):
 ################### Calibration and Template Loading ###########################
 def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
     calib_path = os.path.join(calib_dir, "calibration_data.txt")
-    pixels_per_mm = None
+    pixels_per_mm_ball = None
     template_files = []
     hsv_lower = None
     hsv_upper = None
     with open(calib_path, "r") as f:
         for line in f:
             if line.startswith("pixels_per_mm_ball"):
-                pixels_per_mm = float(line.split("=")[1].strip())
+                pixels_per_mm_ball = float(line.split("=")[1].strip())
             if line.startswith("template_files"):
                 files = line.split("=")[1].strip()
                 template_files = [os.path.join(calib_dir, fn.strip()) for fn in files.split(",") if fn.strip()]
@@ -175,9 +183,9 @@ def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
                 hsv_lower = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
             if line.startswith("hsv_upper"):
                 hsv_upper = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
-    if pixels_per_mm is None:
+    if pixels_per_mm_ball is None:
         raise ValueError("pixels_per_mm_ball not found in calibration file.")
-    return pixels_per_mm, template_files, hsv_lower, hsv_upper
+    return pixels_per_mm_ball, template_files, hsv_lower, hsv_upper
 
 def load_templates(template_files):
     templates = []
@@ -210,8 +218,12 @@ def detect_position_with_templates(frame, templates):
     return None, None
 
 # Load calibration and templates at startup
-pixels_per_mm, template_files, hsv_lower, hsv_upper = load_calibration()
+pixels_per_mm_ball, template_files, hsv_lower, hsv_upper = load_calibration()
+print(f"[DEBUG] Camera IDs: {CAMERA_IDS}")
+print(f"[DEBUG] Calibration pixels_per_mm_ball: {pixels_per_mm_ball}")
+print(f"[DEBUG] Template files: {template_files}")
 templates = load_templates(template_files)
+print(f"[DEBUG] Number of templates loaded: {len(templates)}")
 
 # Update capture_position to use template matching
 def capture_position():
@@ -223,16 +235,64 @@ def capture_position():
         if not ret:
             z_positions.append(None)
             continue
-        
         # Use template matching for position detection
         center, match_val = detect_position_with_templates(frame, templates)
+        debug_frame = frame.copy() if DEBUG else None
         if center is not None:
             x, y = center
-            # Convert to mm using calibration
-            x_mm = x / pixels_per_mm
-            y_mm = y / pixels_per_mm
+            x_mm = x / pixels_per_mm_ball
+            y_mm = y / pixels_per_mm_ball
+            if DEBUG:
+                print(f"[DEBUG] Camera {idx}: Template match at pixel=({x},{y}), mm=({x_mm:.2f},{y_mm:.2f}), match_val={match_val}")
+                cv2.circle(debug_frame, (x, y), 10, (0, 255, 0), 2)
+                # Print HSV value at detected center
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                if 0 <= y < hsv.shape[0] and 0 <= x < hsv.shape[1]:
+                    ball_hsv = hsv[y, x]
+                    print(f"[DEBUG] Ball center HSV: {ball_hsv}")
+                    print(f"[DEBUG] Is ball in range? {lower[0] <= ball_hsv[0] <= upper[0] and lower[1] <= ball_hsv[1] <= upper[1] and lower[2] <= ball_hsv[2] <= upper[2]}")
+            else:
+                x_mm, y_mm = None, None
+                if DEBUG:
+                    print(f"[DEBUG] Camera {idx}: No template match found.")
         else:
             x_mm, y_mm = None, None
+            if DEBUG:
+                print(f"[DEBUG] Camera {idx}: No template match found.")
+        if DEBUG:
+            # Show the mask and the debug frame
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            if hsv_lower is not None and hsv_upper is not None:
+                hsv_lower_np = np.array(hsv_lower)
+                hsv_upper_np = np.array(hsv_upper)
+                hsv_range = hsv_upper_np - hsv_lower_np
+                margin = (hsv_range * HSV_MARGIN_PERCENT).astype(int)
+                # Define minimum and maximum bounds. [Hue, saturation, value] ([min], [max])
+                lower = np.clip(hsv_lower_np - margin, [0, 0, 0], [179, 255, 255])
+                upper = np.clip(hsv_upper_np + margin, [0, 0, 0], [179, 255, 255])
+                lower = tuple(lower)
+                upper = tuple(upper)
+                margin_str = str(margin)
+            else:
+                preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
+                lower = preset['lower']
+                upper = preset['upper']
+                margin_str = 'Preset'
+            print(f"[DEBUG] HSV lower: {lower}, upper: {upper}, margin: {margin_str}")
+            mask = cv2.inRange(hsv, lower, upper)
+           
+            # Debug: Print HSV at ball center and mask statistics
+            if center is not None:
+                x, y = center
+                if 0 <= y < hsv.shape[0] and 0 <= x < hsv.shape[1]:
+                    ball_hsv = hsv[y, x]
+                    print(f"[DEBUG] Ball center HSV: {ball_hsv}")
+                    print(f"[DEBUG] Is ball in range? {lower[0] <= ball_hsv[0] <= upper[0] and lower[1] <= ball_hsv[1] <= upper[1] and lower[2] <= ball_hsv[2] <= upper[2]}")
+            nonzero_pixels = cv2.countNonZero(mask)
+            print(f"[DEBUG] Mask has {nonzero_pixels} non-zero pixels out of {mask.shape[0] * mask.shape[1]} total")
+            cv2.imshow(f"Camera {idx} Debug", debug_frame)
+            cv2.imshow(f"Camera {idx} Mask", mask)
+            cv2.waitKey(1)
         if idx == 0:
             top_x, top_y = x_mm, y_mm
         else:
@@ -421,7 +481,7 @@ def run_data_collection(run_index):
                     # else: not a temperature packet, ignore
                     
                 except json.JSONDecodeError:
-                    # Not a JSON packet, could be a control message, ignore
+                    # Ignore non JSON packet messages for data collection
                     pass
             except socket.timeout:
                 continue
@@ -453,6 +513,7 @@ def run_data_collection(run_index):
         print("\n[INFO] Data collection interrupted by user.")
     finally:
         conn.settimeout(None)  # Reset timeout to blocking mode
+       
         # Clear any remaining buffers
         thermo_buffer.clear()
         position_buffer.clear()
@@ -578,3 +639,6 @@ def cleanup_and_exit():
         pass
     print("[INFO] Cleanup complete. Exiting.")
     os._exit(1)
+
+if DEBUG:
+    cv2.destroyAllWindows()
