@@ -32,7 +32,7 @@ sys.path.append('/home/starfish2/STARFISH/Thermal/daqhats_custom_stuff/examples/
 from daqhats_utils import select_hat_device
 
 ################################ CONFIGURATION ################################
-PC_IP = '192.168.0.105'        # Update with current Host PC's IP address
+PC_IP = '192.168.0.100'        # Update with current Host PC's IP address
 PC_PORT = 5005
 
 SMA_GPIO_PIN = 16
