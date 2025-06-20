@@ -1,7 +1,7 @@
 import os
 
 # Set the path to the directory containing your files
-directory = './training_images/set2/'
+directory = './training_images/set7/'
 
 # Loop through all files in the directory
 for filename in os.listdir(directory):
@@ -9,7 +9,7 @@ for filename in os.listdir(directory):
     name, ext = os.path.splitext(filename)
 
     # Construct the new filename
-    new_name = f"{name}_set2{ext}"
+    new_name = f"{name}_set7{ext}"
 
     # Build full paths
     src = os.path.join(directory, filename)
