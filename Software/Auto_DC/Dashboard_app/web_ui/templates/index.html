@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>STARFISH Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; }
+        .navbar {
+            background-color: #2c3e50;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+        }
+        .navbar button {
+            background-color: inherit;
+            color: white;
+            padding: 14px 20px;
+            font-size: 16px;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .navbar button:hover {
+            background-color: #1abc9c;
+        }
+        .tab-content {
+            padding: 30px;
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        h1 {
+            text-align: center;
+            padding: 20px;
+        }
+        form input[type="text"],
+        form input[type="number"] {
+            width: 300px;
+            padding: 5px;
+            margin-bottom: 10px;
+            display: inline-block;
+            float: right;
+        }
+        form label {
+            width: 200px;
+            display: inline-block;
+            text-align: left;
+        }
+        .form-row {
+            clear: both;
+            margin-bottom: 10px;
+        }
+        .status-box {
+            border: 1px solid #ccc;
+            padding: 15px;
+            background: #f9f9f9;
+            margin-top: 10px;
+        }
+        .indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .green { background-color: #2ecc71; }
+        .red { background-color: #e74c3c; }
+        .trial-log {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 250px;
+            overflow-y: auto;
+            background: #fff;
+            font-family: monospace;
+        }
+        .button-group {
+            margin-top: 10px;
+        }
+    </style>
+    <script>
+        function showTab(id) {
+            var tabs = document.getElementsByClassName('tab-content');
+            for (var i = 0; i < tabs.length; i++) {
+                tabs[i].classList.remove('active');
+            }
+            document.getElementById(id).classList.add('active');
+        }
+        window.onload = function() {
+            showTab('calibration');
+        }
+    </script>
+</head>
+<body>
+
+    <h1>⭐ STARFISH Control Panel 🐟</h1>
+
+    <div class="navbar">
+        <button onclick="showTab('calibration')">Calibration</button>
+        <button onclick="showTab('init')">Initialize Connections</button>
+        <button onclick="showTab('collect')">Data Collection</button>
+        <button onclick="showTab('plot')">Plot Results</button>
+        <button onclick="showTab('help')">Help</button>
+    </div>
+
+    <div id="calibration" class="tab-content">
+        <h2>Calibration</h2>
+
+        <div class="section">
+            <h3>Red HSV Range</h3>
+            <form>
+                Hue: <input type="number" placeholder="low"> - <input type="number" placeholder="high"><br>
+                Sat: <input type="number" placeholder="low"> - <input type="number" placeholder="high"><br>
+                Val: <input type="number" placeholder="low"> - <input type="number" placeholder="high"><br>
+            </form>
+        </div>
+
+        <div class="section">
+            <button onclick="location.href='/run_calibrate_pixels'">Calibrate Pixels/mm</button>
+            <button onclick="location.href='/run_calibrate_templates'">Calibrate Image Templates</button>
+            <button onclick="location.href='/run_calibration_results'">Show Calibration Results</button>
+        </div>
+
+        <div class="section">
+            <h4>Calibration Output</h4>
+            <p><strong>Pixels per mm:</strong> <span id="pxmm_result">--</span></p>
+            <p><strong>Template Preview:</strong></p>
+            <img src="/static/template_preview.jpg" width="320" alt="Template Preview">
+        </div>
+    </div>
+
+    <div id="init" class="tab-content">
+        <h2>Initialize Connections</h2>
+        <button onclick="location.href='/ready_client'">Ready Client</button>
+        <button onclick="location.href='/start_host'">Start Host</button>
+
+        <div class="status-box">
+            <h4>Connection Status</h4>
+            <p><strong>Latency:</strong> <span id="latency">-- ms</span></p>
+            <p><strong>Verification:</strong> <span id="conn_status">Waiting...</span></p>
+            <p><strong>Ready for Data Collection:</strong>
+                <span class="indicator red" id="ready_indicator"></span>
+            </p>
+        </div>
+    </div>
+
+    <div id="collect" class="tab-content">
+        <h2>Data Collection</h2>
+        <form>
+            <div class="form-row">
+                <label for="voltage">Voltage:</label>
+                <input type="text" id="voltage" name="voltage">
+            </div>
+            <div class="form-row">
+                <label for="load">Load:</label>
+                <input type="text" id="load" name="load">
+            </div>
+            <div class="form-row">
+                <label for="current">Current Cap:</label>
+                <input type="text" id="current" name="current">
+            </div>
+            <div class="form-row">
+                <label for="temp">Target Temp (°C):</label>
+                <input type="text" id="temp" name="temp">
+            </div>
+            <div class="form-row">
+                <label for="runs">Number of Runs:</label>
+                <input type="number" id="runs" name="runs">
+            </div>
+            <div class="form-row button-group">
+                <button type="button" onclick="alert('Data Collection Started (TODO: Link backend)')">Start Data Collection</button>
+                <button type="button" style="background-color:#e74c3c; color:white;" onclick="alert('Data Collection Stopped (TODO: Link kill switch)')">Stop Data Collection</button>
+            </div>
+        </form>
+
+        <div class="status-box">
+            <h4>Trial Progress</h4>
+            <p><strong>Current Trial:</strong> <span id="current_trial">--</span></p>
+            <h4>Match Summary</h4>
+            <div class="trial-log" id="match_log">
+                <!-- Dynamic trial result entries will appear here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="plot" class="tab-content">
+        <h2>Plot Results</h2>
+        <button onclick="location.href='/run_plotting'">Run Plotting Script</button>
+    </div>
+
+    <div id="help" class="tab-content">
+        <h2>Help & Instructions</h2>
+        <p>A user manual will be displayed here once uploaded.</p>
+    </div>
+
+</body>
+</html>

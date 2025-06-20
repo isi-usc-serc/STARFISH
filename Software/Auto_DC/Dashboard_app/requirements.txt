@@ -1,0 +1,17 @@
+# STARFISH Software - Python Requirements
+# This file lists all Python dependencies and includes system-wide goals for this project.
+
+# 🔧 Project Intentions:
+# - Web UI to control Pi and PC STARFISH subsystems
+# - Calibration, connection, data collection, and plotting tabs
+# - Use buttons to trigger scripts, pass parameters, and visualize results
+# - Enable seamless startup and runtime control for experiment sessions
+
+# 🔧 Goals for Completion:
+# - Build install.sh for automated PC and Pi setup
+# - Replace hardcoded IPs with dynamic IP negotiation
+# - Enable OpenCV output embedding into the web interface
+# - Add HTML form inputs → Python logic → HTML output updates
+
+# 🔌 Python Packages Required
+flask

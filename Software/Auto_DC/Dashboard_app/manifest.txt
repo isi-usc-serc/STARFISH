@@ -1,0 +1,31 @@
+STARFISH Web UI Manifest
+
+📦 Files included:
+- web_ui/app.py               : Flask server for STARFISH dashboard
+- web_ui/templates/index.html: Full HTML UI with 5 tabs and connected controls
+- requirements.txt            : Python dependencies with project goal comments
+- manifest.txt                : This summary and planning file
+
+📋 Instructions (Prompts to remind ChatGPT of current intentions):
+- "What Flask endpoints need to be wired up?"
+- "How should the Pi learn the PC's IP address automatically?"
+- "What button actions still need backend support?"
+- "How can we stream OpenCV camera feeds into the web UI?"
+- "How can we capture and display results like pixels/mm or match count live in HTML?"
+- "How do we handle connection verification and trial status reporting?"
+- "What should the Install script configure for each device?"
+
+🎯 Goals for Completion:
+1. Write an `install.sh` script that:
+   - Installs required dependencies
+   - Creates virtual environments
+   - Works independently on both PC and Pi after cloning the repo
+
+2. Update Python scripts to:
+   - Accept and parse HTML inputs from the web interface
+   - Execute correct back-end actions per button press
+   - Output results (like pixels/mm, template previews, match count) into the web UI, not just terminal
+
+3. Improve OpenCV display integration:
+   - Ideally contain OpenCV windows inside the web interface
+   - Or use MJPEG-style streamed previews embedded into the HTML
