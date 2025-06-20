@@ -69,13 +69,16 @@ POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
 # Thermocouple configuration for the Pi
 TC_CHANNELS    = [0]        # [0, 1, 2, 3], 4 max channels
 TC_TYPE = "J"               # Thermocouple type: J, K, etc.
-PULSE_DURATION = 50.00      # seconds
 SEND_INTERVAL  = 0.25       # seconds between temperature samples
 
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 10
 INTER_RUN_DELAY = 100       # Interval time between pulses in seconds
 LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse            
+
+# New: Temperature-based SMA control
+TARGET_TEMP_C = 70.0        # Target temperature in Celsius for SMA activation
+MAX_HEAT_TIME = 90.0        # Maximum time to allow heating (seconds) for safety
 
 # Error handling configuration
 MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
@@ -121,13 +124,14 @@ print(f"[INFO] Connected to Raspberry Pi at {addr}", flush=True)
 
 # Send configuration to Pi
 config_packet = {
-    "pulse_duration": PULSE_DURATION,
     "send_interval": SEND_INTERVAL,
     "channels": TC_CHANNELS,
     "tc_type": TC_TYPE,
     "num_runs": NUM_RUNS,
     "run_time": INTER_RUN_DELAY,
-    "lead_time": LEAD_TIME
+    "lead_time": LEAD_TIME,
+    "target_temp_c": TARGET_TEMP_C,
+    "max_heat_time": MAX_HEAT_TIME
 }
 conn.sendall(json.dumps(config_packet).encode())
 

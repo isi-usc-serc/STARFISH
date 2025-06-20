@@ -117,13 +117,16 @@ except HatError as e:
 config = json.loads(client.recv(1024).decode())
 print(f"[INFO] Received config: {config}")
 
+# Default settings are updated by Host upon connection
 TC_CHANNELS = config.get("channels", [0])                # default: [0]
-SMA_PULSE_DURATION = config.get("pulse_duration", 1.0)   # default: 1.0 sec
+# SMA_PULSE_DURATION = config.get("pulse_duration", 1.0) # No longer used
 SEND_INTERVAL = config.get("send_interval", 0.25)        # default: 0.25 sec
 TC_TYPE = getattr(TcTypes, f"TYPE_{config.get('tc_type', 'J')}")
 NUM_RUNS = config.get("num_runs", 1)
-RUN_TIME = config.get("run_time", 20.0)  # seconds
-LEAD_TIME = config.get("lead_time", 2.0) # seconds
+RUN_TIME = config.get("run_time", 20.0)                  # seconds
+LEAD_TIME = config.get("lead_time", 2.0)                 # seconds
+TARGET_TEMP_C = config.get("target_temp_c", 45.0)        # celsius
+MAX_HEAT_TIME = config.get("max_heat_time", 90.0)        # seconds
 
 for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
@@ -153,6 +156,8 @@ def data_collection_loop(run_index):
     pulse_start_time = None
     last_sample_time = time.time()
     pulse_sent = False
+    temp_reached = False
+    main_tc_channel = TC_CHANNELS[0] if TC_CHANNELS else 0
 
     while True:
         if should_exit:
@@ -169,17 +174,34 @@ def data_collection_loop(run_index):
             pulse_start_time = now
             pulse_sent = True
             if DEBUG:
-                print(f"[INFO] SMA pulse started at t={elapsed:.2f}s")
+                print(f"[INFO] SMA pulse started at t={elapsed:.2f}s (target_temp_c={TARGET_TEMP_C}, max_heat_time={MAX_HEAT_TIME})")
             # When the SMA pulse is triggered (right after setting sma_active = True):
             pulse_start_msg = f"pulse_start_ts:{time.time()}"
             send_with_retry((pulse_start_msg + "\n").encode())
 
-        # End SMA pulse after configured duration
-        if sma_active and pulse_sent and (now - pulse_start_time >= SMA_PULSE_DURATION):
-            GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
-            sma_active = False
-            if DEBUG:
-                print(f"[INFO] SMA pulse ended at t={elapsed:.2f}s")
+        # Check temperature and timeout for SMA deactivation
+        if sma_active and pulse_sent:
+            try:
+                temp_val = hat.t_in_read(main_tc_channel)
+                if DEBUG:
+                    print(f"[DEBUG] Main TC channel {main_tc_channel} temp: {temp_val:.2f} C (target: {TARGET_TEMP_C})")
+                if temp_val >= TARGET_TEMP_C:
+                    print(f"[INFO] Target temperature {TARGET_TEMP_C}C reached (actual: {temp_val:.2f}C). Deactivating SMA.")
+                    temp_reached = True
+                elif (now - pulse_start_time) >= MAX_HEAT_TIME:
+                    print(f"[WARN] Max heat time {MAX_HEAT_TIME}s exceeded. Deactivating SMA for safety.")
+                    temp_reached = True
+            except Exception as e:
+                print(f"[ERROR] Temp read failed for SMA control: {e}")
+                # For safety, deactivate if temp read fails repeatedly (optional)
+                if (now - pulse_start_time) >= MAX_HEAT_TIME:
+                    temp_reached = True
+
+            if temp_reached:
+                GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
+                sma_active = False
+                if DEBUG:
+                    print(f"[INFO] SMA pulse ended at t={elapsed:.2f}s (reason: {'temp' if temp_val >= TARGET_TEMP_C else 'timeout'})")
 
         # Sample temperature and send to host at fixed interval
         if now >= last_sample_time:
