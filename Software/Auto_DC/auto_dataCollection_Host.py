@@ -30,6 +30,10 @@ import sys
 import select
 import numpy as np
 
+#TODO Add "heat until temp = ... functionality"
+#TODO Check on joule heating vs current... and also expected current fluctuation (RE Griff/Kris)
+
+
 ############################ Characterization Parameters #######################
 Volts   = 6.0      # volts
 Current = 1.5      # amperes
@@ -71,24 +75,19 @@ SEND_INTERVAL  = 0.25       # seconds between temperature samples
 # Set number of samples to collect, and interval between pulses
 NUM_RUNS = 10
 INTER_RUN_DELAY = 100       # Interval time between pulses in seconds
-LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse
-
-# Debug mode. Set to False to suppress debug output
-DEBUG = True                
+LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse            
 
 # Error handling configuration
 MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
 error_count = 0  # Counter for consecutive errors
 
-# Default HSV color presets for different ball colors
-HSV_PRESETS = {
-    'red':    {'lower': (0, 100, 100),   'upper': (10, 255, 255)},
-    'green':  {'lower': (40, 50, 50),    'upper': (80, 255, 255)},
-    'yellow': {'lower': (20, 100, 100),  'upper': (30, 255, 255)},
-    'blue':   {'lower': (100, 150, 0),   'upper': (140, 255, 255)},
-}
-DEFAULT_BALL_COLOR = 'red'  # Change as needed
-HSV_MARGIN_PERCENT = 0.10   # 10% margin
+# TODO: Add support for multiple ball types - currently only supports one ball type
+# HSV presets moved to calibration script - these are now loaded from calibration_data.txt
+# TODO: Implement multiple ball detection logic here
+# For now, we use the ball type and margins loaded from calibration file
+
+# Debug mode. Set to False to suppress debug output
+DEBUG = True    
 
 #################################### SETUP ####################################
 os.makedirs(FRAME_DIR, exist_ok=True)
@@ -151,50 +150,121 @@ def read_socket_line():
         return None
 
 ############################# CAMERA PROCESSING ###############################
-def detect_position(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # Use auto-calibrated HSV range if available
-    lower = hsv_lower if hsv_lower is not None else (0, 100, 100)
-    upper = hsv_upper if hsv_upper is not None else (10, 255, 255)
-    mask = cv2.inRange(hsv, lower, upper)
-    # No hardcoded color range should overwrite the above
-    moments = cv2.moments(mask)
-    if moments["m00"] != 0:
-        cx = int(moments["m10"] / moments["m00"])
-        cy = int(moments["m01"] / moments["m00"])
-        return cx, cy
-    return None, None
+# def detect_position(frame):
+#     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+#     # Use auto-calibrated HSV range if available
+#     lower = hsv_lower if hsv_lower is not None else (0, 100, 100)
+#     upper = hsv_upper if hsv_upper is not None else (10, 255, 255)
+#     mask = cv2.inRange(hsv, lower, upper)
+#     # No hardcoded color range should overwrite the above
+#     moments = cv2.moments(mask)
+#     if moments["m00"] != 0:
+#         cx = int(moments["m10"] / moments["m00"])
+#         cy = int(moments["m01"] / moments["m00"])
+#         return cx, cy
+#     return None, None
+
+# TODO: Add support for multiple ball types - currently only supports one ball type
+# TODO: Implement multiple ball detection logic here
+# For now, we use the ball type and margins loaded from calibration fil
 
 ################### Calibration and Template Loading ###########################
 def load_calibration(calib_dir="Software/Auto_DC/calibration_data"):
     calib_path = os.path.join(calib_dir, "calibration_data.txt")
     pixels_per_mm_ball = None
+    pixels_per_mm_grid = None
+    grid_to_camera_mm = None
+    ball_to_camera_mm = None
+    camera_id = None
     template_files = []
-    hsv_lower = None
-    hsv_upper = None
+    ball_type = "red_ball"  # Default
+    hsv_lower1 = None
+    hsv_upper1 = None
+    hsv_lower2 = None
+    hsv_upper2 = None
+    
     with open(calib_path, "r") as f:
         for line in f:
             if line.startswith("pixels_per_mm_ball"):
                 pixels_per_mm_ball = float(line.split("=")[1].strip())
-            if line.startswith("template_files"):
+            elif line.startswith("pixels_per_mm_grid"):
+                pixels_per_mm_grid = float(line.split("=")[1].strip())
+            elif line.startswith("grid_to_camera_mm"):
+                grid_to_camera_mm = float(line.split("=")[1].strip())
+            elif line.startswith("ball_to_camera_mm"):
+                ball_to_camera_mm = float(line.split("=")[1].strip())
+            elif line.startswith("camera_id"):
+                camera_id = int(line.split("=")[1].strip())
+            elif line.startswith("template_files"):
                 files = line.split("=")[1].strip()
                 template_files = [os.path.join(calib_dir, fn.strip()) for fn in files.split(",") if fn.strip()]
-            if line.startswith("hsv_lower"):
-                hsv_lower = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
-            if line.startswith("hsv_upper"):
-                hsv_upper = tuple(int(x) for x in line.split("=")[1].strip().strip("() ").split(","))
+            elif line.startswith("ball_type"):
+                ball_type = line.split("=")[1].strip()
+            elif line.startswith("hsv_lower1"):
+                hsv_str = line.split("=")[1].strip()
+                hsv_lower1 = eval(hsv_str)  # Safe since we control the format
+            elif line.startswith("hsv_upper1"):
+                hsv_str = line.split("=")[1].strip()
+                hsv_upper1 = eval(hsv_str)  # Safe since we control the format
+            elif line.startswith("hsv_lower2"):
+                hsv_str = line.split("=")[1].strip()
+                hsv_lower2 = eval(hsv_str)  # Safe since we control the format
+            elif line.startswith("hsv_upper2"):
+                hsv_str = line.split("=")[1].strip()
+                hsv_upper2 = eval(hsv_str)  # Safe since we control the format
+    
     if pixels_per_mm_ball is None:
         raise ValueError("pixels_per_mm_ball not found in calibration file.")
-    return pixels_per_mm_ball, template_files, hsv_lower, hsv_upper
+    
+    # Use pre-calculated HSV ranges if available, otherwise use defaults
+    if hsv_lower1 is not None and hsv_upper1 is not None and hsv_lower2 is not None and hsv_upper2 is not None:
+        print(f"[INFO] Loaded pre-calculated HSV ranges from calibration file")
+        print(f"[INFO] HSV range 1: lower={hsv_lower1}, upper={hsv_upper1}")
+        print(f"[INFO] HSV range 2: lower={hsv_lower2}, upper={hsv_upper2}")
+    else:
+        print(f"[WARN] Pre-calculated HSV ranges not found, using default HSV ranges")
+        # Default HSV ranges for red (same as calibration script)
+        hsv_lower1 = [0, 100, 100]
+        hsv_upper1 = [10, 255, 255]
+        hsv_lower2 = [160, 100, 100]
+        hsv_upper2 = [179, 255, 255]
+    
+    print(f"[INFO] Loaded calibration: ball_type={ball_type}")
+    grid_str = f"{pixels_per_mm_grid:.4f}" if pixels_per_mm_grid is not None else "N/A"
+    grid_dist_str = f"{grid_to_camera_mm:.1f}" if grid_to_camera_mm is not None else "N/A"
+    ball_dist_str = f"{ball_to_camera_mm:.1f}" if ball_to_camera_mm is not None else "N/A"
+    print(f"[INFO] Pixels per mm: ball={pixels_per_mm_ball:.4f}, grid={grid_str}")
+    print(f"[INFO] Camera distances: grid={grid_dist_str}mm, ball={ball_dist_str}mm")
+    print(f"[INFO] Calibration camera ID: {camera_id if camera_id is not None else 'N/A'}")
+    print(f"[INFO] Final HSV ranges: range1=({hsv_lower1}, {hsv_upper1}), range2=({hsv_lower2}, {hsv_upper2})")
+    
+    return pixels_per_mm_ball, template_files, hsv_lower1, hsv_upper1, hsv_lower2, hsv_upper2, camera_id
 
 def load_templates(template_files):
     templates = []
+    
+    # First try to load templates from the provided file list
     for fn in template_files:
         temp = cv2.imread(fn)
         if temp is not None:
             templates.append(temp)
+            print(f"[INFO] Loaded template: {os.path.basename(fn)}")
         else:
             print(f"[WARN] Could not load template: {fn}")
+    
+    # If no templates found, check for existing template files in calibration directory
+    if not templates:
+        print("[INFO] No templates found in calibration data, checking for existing template files...")
+        calib_dir = "Software/Auto_DC/calibration_data"
+        for i in range(1, 10):  # Check for template_1.png through template_9.png
+            template_name = f"template_{i}.png"
+            template_path = os.path.join(calib_dir, template_name)
+            if os.path.exists(template_path):
+                temp = cv2.imread(template_path)
+                if temp is not None:
+                    templates.append(temp)
+                    print(f"[INFO] Found existing template file: {template_name}")
+    
     return templates
 
 # Template-based position detection
@@ -218,16 +288,22 @@ def detect_position_with_templates(frame, templates):
     return None, None
 
 # Load calibration and templates at startup
-pixels_per_mm_ball, template_files, hsv_lower, hsv_upper = load_calibration()
+pixels_per_mm_ball, template_files, hsv_lower1, hsv_upper1, hsv_lower2, hsv_upper2, camera_id = load_calibration()
 print(f"[DEBUG] Camera IDs: {CAMERA_IDS}")
 print(f"[DEBUG] Calibration pixels_per_mm_ball: {pixels_per_mm_ball}")
 print(f"[DEBUG] Template files: {template_files}")
 templates = load_templates(template_files)
 print(f"[DEBUG] Number of templates loaded: {len(templates)}")
 
-# Update capture_position to use color mask + template matching (like calibration tool)
+# TODO: Future enhancement - use camera_id from calibration file for multi-camera support
+# For now, CAMERA_IDS is still manually defined at the top of the script
+if camera_id is not None:
+    print(f"[INFO] Calibration used camera ID: {camera_id}")
+    print(f"[INFO] Host script using camera IDs: {CAMERA_IDS}")
+
+# Update capture_position to use template matching (identical logic to calibration script)
 def capture_position():
-    """Capture position data from all cameras using color mask + template matching (like calibration tool)."""
+    """Capture position data from all cameras using color mask + template matching (identical to calibration tool)."""
     top_x, top_y = None, None
     z_positions = []
     for idx, cam in enumerate(cams):
@@ -235,33 +311,60 @@ def capture_position():
         if not ret:
             z_positions.append(None)
             continue
+        
+        # Step 1: Apply color filtering FIRST (identical to calibration script)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        # Ensure HSV bounds are in correct order
-        global hsv_lower, hsv_upper
-        if hsv_lower is not None and hsv_upper is not None:
-            hsv_lower = tuple(min(l, u) for l, u in zip(hsv_lower, hsv_upper))
-            hsv_upper = tuple(max(l, u) for l, u in zip(hsv_lower, hsv_upper))
-            lower = np.array(hsv_lower, dtype=np.uint8)
-            upper = np.array(hsv_upper, dtype=np.uint8)
+        # Use calibrated HSV ranges from calibration file
+        global hsv_lower1, hsv_upper1, hsv_lower2, hsv_upper2
+        if hsv_lower1 is not None and hsv_upper1 is not None and hsv_lower2 is not None and hsv_upper2 is not None:
+            # Use the HSV ranges directly as loaded from calibration file
+            lower1 = np.array(hsv_lower1, dtype=np.uint8)
+            upper1 = np.array(hsv_upper1, dtype=np.uint8)
+            lower2 = np.array(hsv_lower2, dtype=np.uint8)
+            upper2 = np.array(hsv_upper2, dtype=np.uint8)
         else:
-            preset = HSV_PRESETS[DEFAULT_BALL_COLOR]
-            lower = np.array(preset['lower'], dtype=np.uint8)
-            upper = np.array(preset['upper'], dtype=np.uint8)
-        mask = cv2.inRange(hsv, lower, upper)
-        # Morphological operations to clean up the mask
+            print("[ERROR] HSV ranges not loaded from calibration file")
+            z_positions.append(None)
+            continue
+            
+        # Step 2: Create two HSV masks and combine them (identical to calibration script)
+        mask1 = cv2.inRange(hsv, lower1, upper1)
+        mask2 = cv2.inRange(hsv, lower2, upper2)
+        mask = cv2.bitwise_or(mask1, mask2)
+        
+        # Debug: Show HSV mask statistics
+        if DEBUG:
+            mask_pixels = cv2.countNonZero(mask)
+            total_pixels = mask.shape[0] * mask.shape[1]
+            mask_percent = (mask_pixels / total_pixels) * 100
+            print(f"[DEBUG] Camera {idx}: HSV mask covers {mask_pixels} pixels ({mask_percent:.1f}% of frame)")
+        
+        # Step 3: Morphological operations to clean up the mask (identical to calibration script)
         kernel = np.ones((5,5), np.uint8)
         mask = cv2.erode(mask, kernel, iterations=1)
         mask = cv2.dilate(mask, kernel, iterations=2)
-        # Find contours (blobs = connected regions of pixels)
+        
+        # Step 4: Find contours (blobs = connected regions of pixels) (identical to calibration script)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Debug: Show contour information
+        if DEBUG:
+            print(f"[DEBUG] Camera {idx}: Found {len(contours)} contours")
+            for i, cnt in enumerate(contours):
+                x, y, w, h = cv2.boundingRect(cnt)
+                print(f"[DEBUG] Camera {idx}: Contour {i}: {w}x{h} at ({x},{y})")
+        
+        # Step 5: Template matching ONLY on color-filtered regions (identical to calibration script)
         best_val = -1
         best_loc = None
         best_temp = None
         best_rect = None
+        valid_contours = 0
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
             if w < 10 or h < 10:
                 continue  # Ignore tiny blobs
+            valid_contours += 1
             roi = frame[y:y+h, x:x+w]
             for temp in templates:
                 if roi.shape[0] < temp.shape[0] or roi.shape[1] < temp.shape[1]:
@@ -273,6 +376,16 @@ def capture_position():
                     best_loc = (x + max_loc[0], y + max_loc[1])
                     best_temp = temp
                     best_rect = (best_loc, (best_loc[0] + temp.shape[1], best_loc[1] + temp.shape[0]))
+        
+        # Debug: Show template matching results
+        if DEBUG:
+            print(f"[DEBUG] Camera {idx}: {valid_contours} valid contours processed for template matching")
+            if best_rect is not None:
+                print(f"[DEBUG] Camera {idx}: Best template match value: {best_val:.3f}")
+            else:
+                print(f"[DEBUG] Camera {idx}: No template match found (best_val: {best_val})")
+        
+        # Step 6: Draw detection and convert to mm (identical to calibration script)
         debug_frame = frame.copy() if DEBUG else None
         if best_rect is not None:
             # Draw rectangle and circle for debug
@@ -282,21 +395,24 @@ def capture_position():
                           best_rect[0][1] + (best_rect[1][1] - best_rect[0][1])//2)
                 cv2.circle(debug_frame, center, 5, (0,0,255), -1)
                 print(f"[DEBUG] Camera {idx}: Template+mask match at pixel={center}, match_val={best_val:.2f}")
-            # Convert to mm
+            # Convert to mm using calibrated pixels_per_mm_ball
             x_mm = (best_rect[0][0] + (best_rect[1][0] - best_rect[0][0])//2) / pixels_per_mm_ball
             y_mm = (best_rect[0][1] + (best_rect[1][1] - best_rect[0][1])//2) / pixels_per_mm_ball
         else:
             x_mm, y_mm = None, None
             if DEBUG:
                 print(f"[DEBUG] Camera {idx}: No template+mask match found.")
+        
         if DEBUG:
             cv2.imshow(f"Camera {idx} Debug", debug_frame)
             cv2.imshow(f"Camera {idx} Mask", mask)
             cv2.waitKey(1)
+        
         if idx == 0:
             top_x, top_y = x_mm, y_mm
         else:
             z_positions.append(y_mm if y_mm is not None else None)
+    
     z_avg = round(sum(z for z in z_positions if z is not None) / max(len([z for z in z_positions if z is not None]), 1), 2)
     from datetime import timezone
     return datetime.now(timezone.utc).isoformat(), top_x, top_y, z_avg
@@ -432,6 +548,7 @@ def run_data_collection(run_index):
             try:
                 raw = read_socket_line()
                 if raw is None:
+                    # No temperature data received - this is normal, just continue
                     continue
                     
                 msg = raw.strip()
@@ -478,6 +595,12 @@ def run_data_collection(run_index):
                                 else:
                                     if DEBUG:
                                         print(f"[DEBUG] Skipping CSV write: sma_start_time is None (thermo_ts={thermo_ts})")
+                            else:
+                                if DEBUG:
+                                    print(f"[DEBUG] Position/thermo mismatch: delta={delta:.1f}ms > {ALIGNMENT_WINDOW_MS}ms")
+                        else:
+                            if DEBUG:
+                                print(f"[DEBUG] No position data available for thermo ts: {thermo_ts:.3f}")
                     # else: not a temperature packet, ignore
                     
                 except json.JSONDecodeError:

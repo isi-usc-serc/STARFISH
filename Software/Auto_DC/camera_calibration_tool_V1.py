@@ -11,7 +11,7 @@
 #
 # @author: BillyChrist
 # """
- 
+
 
 import cv2
 import numpy as np
@@ -22,26 +22,6 @@ GRID_SIZE_MM         = 25.0     # Size of one grid square in mm
 GRID_TO_SUBJECT_MM   = 56.5     # Height from grid to subject (ball) in mm
 SUBJECT_SIZE_MM      = 10.0     # Diameter of the subject (ball) in mm
 SUBJECT_TO_CAMERA_MM = 205.0    # Height from top of subject to camera in mm
-
-# HSV Color Presets (moved from data collection program)
-# TODO: Add support for multiple balls - currently only supports one ball type
-HSV_PRESETS = {
-    "red_ball": {
-        "hue_range": (0, 10),      # Red wraps around 0-10 and 170-180
-        "saturation_range": (100, 255),
-        "value_range": (50, 255),
-        "hue_margin": 5,           # Tunable margin for hue
-        "saturation_margin": 20,   # Tunable margin for saturation  
-        "value_margin": 30         # Tunable margin for value
-    }
-    # TODO: Add more ball colors here:
-    # "blue_ball": { ... },
-    # "green_ball": { ... },
-    # etc.
-}
-
-# Default ball type to use
-DEFAULT_BALL_TYPE = "red_ball"
 
 CALIB_DIR = os.path.join(os.path.dirname(__file__), "calibration_data")
 if not os.path.exists(CALIB_DIR):
@@ -90,143 +70,76 @@ def main():
     print(f"[INFO] Available cameras: {cams}")
     cam_id = int(input(f"Select camera ID from {cams}: "))
 
-    # Check if calibration file exists and load existing data
-    calib_path = os.path.join(CALIB_DIR, "calibration_data.txt")
-    existing_data = {}
-    if os.path.exists(calib_path):
-        print("[INFO] Existing calibration file found. Loading existing data...")
-        with open(calib_path, "r") as f:
-            for line in f:
-                if "=" in line:
-                    key, value = line.strip().split("=", 1)
-                    existing_data[key.strip()] = value.strip()
-        print(f"[INFO] Loaded existing data: {list(existing_data.keys())}")
-    else:
-        print("[INFO] No existing calibration file found. Starting fresh calibration.")
+    cap = cv2.VideoCapture(cam_id)
+    if not cap.isOpened():
+        print(f"[ERROR] Could not open camera {cam_id}")
+        return
 
-    # Initialize data variables with existing values or defaults
-    pixels_per_mm_grid = float(existing_data.get("pixels_per_mm_grid", 0))
-    pixels_per_mm_ball = float(existing_data.get("pixels_per_mm_ball", 0))
-    grid_to_camera = float(existing_data.get("grid_to_camera_mm", SUBJECT_TO_CAMERA_MM + SUBJECT_SIZE_MM + GRID_TO_SUBJECT_MM))
-    ball_to_camera = float(existing_data.get("ball_to_camera_mm", SUBJECT_TO_CAMERA_MM + (SUBJECT_SIZE_MM / 2)))
-    
-    # Load existing templates if available
-    templates = []
-    template_filenames = []
-    if "template_files" in existing_data:
-        existing_templates = existing_data["template_files"].split(",")
-        for template_name in existing_templates:
-            template_name = template_name.strip()
-            template_path = os.path.join(CALIB_DIR, template_name)
-            if os.path.exists(template_path):
-                template = cv2.imread(template_path)
-                if template is not None:
-                    templates.append(template)
-                    template_filenames.append(template_path)
-                    print(f"[INFO] Loaded existing template: {template_name}")
-    
-    # Also check for template files that might exist but not be in the calibration data
-    if not templates:
-        print("[INFO] No templates found in calibration data, checking for existing template files...")
-        for i in range(1, 10):  # Check for template_1.png through template_9.png
-            template_name = f"template_{i}.png"
-            template_path = os.path.join(CALIB_DIR, template_name)
-            if os.path.exists(template_path):
-                template = cv2.imread(template_path)
-                if template is not None:
-                    templates.append(template)
-                    template_filenames.append(template_path)
-                    print(f"[INFO] Found existing template file: {template_name}")
-    
-    print(f"[INFO] Found {len(templates)} existing templates.")
-
-    # Check if we have existing pixels/mm data and offer to skip calibration
-    if pixels_per_mm_grid > 0 and pixels_per_mm_ball > 0:
-        print(f"[INFO] Found existing pixels/mm data: grid={pixels_per_mm_grid:.4f}, ball={pixels_per_mm_ball:.4f}")
-        print("[INFO] Enter 'c' to calibrate pixels per mm, or 's' to skip (use existing data).")
-        mode = input("Enter mode (c/s): ").strip().lower()
-        if mode == 's':
-            print("[INFO] Skipping pixels per mm calibration. Using existing data.")
-            # Skip to template training
-        else:
-            print("[INFO] Proceeding with pixels per mm calibration.")
-            # Continue with calibration
-    else:
-        print("[INFO] No existing pixels/mm data found. Proceeding with calibration.")
-        mode = 'c'
-
-    if mode == 'c':
-        cap = cv2.VideoCapture(cam_id)
-        if not cap.isOpened():
-            print(f"[ERROR] Could not open camera {cam_id}")
+    print("[INFO] Press SPACE to capture a frame for calibration.")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("[ERROR] Failed to grab frame.")
+            break
+        cv2.imshow("Live Feed - Press SPACE to capture", frame)
+        key = cv2.waitKey(1)
+        if key == 32:  # SPACE
+            calib_img = frame.copy()
+            break
+        elif key == 27:  # ESC
+            print("[INFO] Calibration cancelled.")
+            cap.release()
+            cv2.destroyAllWindows()
             return
+    cap.release()
+    cv2.destroyAllWindows()
 
-        print("[INFO] Press SPACE to capture a frame for calibration.")
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("[ERROR] Failed to grab frame.")
-                break
-            cv2.imshow("Live Feed - Press SPACE to capture", frame)
-            key = cv2.waitKey(1)
-            if key == 32:  # SPACE
-                calib_img = frame.copy()
-                break
-            elif key == 27:  # ESC
-                print("[INFO] Calibration cancelled.")
-                cap.release()
-                cv2.destroyAllWindows()
-                return
-        cap.release()
-        cv2.destroyAllWindows()
+    print("[INFO] Click two points on the calibration image (e.g., across known grid squares). Press ESC when done.")
+    global clicked_points
+    clicked_points = []
+    cv2.imshow("Calibration Image - Click Two Points", calib_img)
+    cv2.setMouseCallback("Calibration Image - Click Two Points", click_event)
+    while len(clicked_points) < 2:
+        cv2.waitKey(1)
+    cv2.destroyAllWindows()
 
-        print("[INFO] Click two points on the calibration image (e.g., across known grid squares). Press ESC when done.")
-        global clicked_points
-        clicked_points = []
-        cv2.imshow("Calibration Image - Click Two Points", calib_img)
-        cv2.setMouseCallback("Calibration Image - Click Two Points", click_event)
-        while len(clicked_points) < 2:
-            cv2.waitKey(1)
-        cv2.destroyAllWindows()
+    pt1, pt2 = clicked_points[:2]
+    pixel_dist = np.linalg.norm(np.array(pt1) - np.array(pt2))
+    print(f"[INFO] Pixel distance between points: {pixel_dist:.2f}")
 
-        pt1, pt2 = clicked_points[:2]
-        pixel_dist = np.linalg.norm(np.array(pt1) - np.array(pt2))
-        print(f"[INFO] Pixel distance between points: {pixel_dist:.2f}")
+    num_squares = float(input("Enter number of grid squares between points: "))
+    real_dist_mm = num_squares * GRID_SIZE_MM
+    pixels_per_mm_grid = pixel_dist / real_dist_mm
+    print(f"[INFO] Pixels per mm at grid height: {pixels_per_mm_grid:.4f}")
 
-        num_squares = float(input("Enter number of grid squares between points: "))
-        real_dist_mm = num_squares * GRID_SIZE_MM
-        pixels_per_mm_grid = pixel_dist / real_dist_mm
-        print(f"[INFO] Pixels per mm at grid height: {pixels_per_mm_grid:.4f}")
+    # Use parameters for heights
+    grid_to_camera = SUBJECT_TO_CAMERA_MM + SUBJECT_SIZE_MM + GRID_TO_SUBJECT_MM
+    ball_to_camera = SUBJECT_TO_CAMERA_MM + (SUBJECT_SIZE_MM / 2)
+    print(f"[INFO] grid_to_camera_mm = {grid_to_camera:.2f}")
+    print(f"[INFO] ball_to_camera_mm = {ball_to_camera:.2f}")
 
-        # Use parameters for heights
-        grid_to_camera = SUBJECT_TO_CAMERA_MM + SUBJECT_SIZE_MM + GRID_TO_SUBJECT_MM
-        ball_to_camera = SUBJECT_TO_CAMERA_MM + (SUBJECT_SIZE_MM / 2)
-        print(f"[INFO] grid_to_camera_mm = {grid_to_camera:.2f}")
-        print(f"[INFO] ball_to_camera_mm = {ball_to_camera:.2f}")
+    pixels_per_mm_ball = pixels_per_mm_grid * (grid_to_camera / ball_to_camera)
+    print(f"[INFO] Pixels per mm at ball height: {pixels_per_mm_ball:.4f}")
 
-        pixels_per_mm_ball = pixels_per_mm_grid * (grid_to_camera / ball_to_camera)
-        print(f"[INFO] Pixels per mm at ball height: {pixels_per_mm_ball:.4f}")
-
-        # Save to file
-        with open(calib_path, "w") as f:
-            f.write(f"pixels_per_mm_grid = {pixels_per_mm_grid:.6f}\n")
-            f.write(f"pixels_per_mm_ball = {pixels_per_mm_ball:.6f}\n")
-            f.write(f"grid_to_camera_mm = {grid_to_camera:.2f}\n")
-            f.write(f"ball_to_camera_mm = {ball_to_camera:.2f}\n")
-            f.write(f"calibration_points = {pt1}, {pt2}\n")
-            f.write(f"real_dist_mm = {real_dist_mm:.2f}\n")
-            f.write(f"num_squares = {num_squares}\n")
-            f.write(f"camera_id = {cam_id}\n")
-        print(f"[INFO] Calibration data saved to {calib_path}")
+    # Save to file
+    calib_path = os.path.join(CALIB_DIR, "calibration_data.txt")
+    with open(calib_path, "w") as f:
+        f.write(f"pixels_per_mm_grid = {pixels_per_mm_grid:.6f}\n")
+        f.write(f"pixels_per_mm_ball = {pixels_per_mm_ball:.6f}\n")
+        f.write(f"grid_to_camera_mm = {grid_to_camera:.2f}\n")
+        f.write(f"ball_to_camera_mm = {ball_to_camera:.2f}\n")
+        f.write(f"calibration_points = {pt1}, {pt2}\n")
+        f.write(f"real_dist_mm = {real_dist_mm:.2f}\n")
+        f.write(f"num_squares = {num_squares}\n")
+        f.write(f"camera_id = {cam_id}\n")
+    print(f"[INFO] Calibration data saved to {calib_path}")
 
     ###################### Template Matching Training #####################
+    templates = []
+    template_filenames = []
     print("[INFO] Enter 't' to train templates (draw box around ball), or 's' to skip.")
     mode = input("Enter mode (t/s): ").strip().lower()
     if mode == 't':
-        # Clear existing templates
-        templates = []
-        template_filenames = []
-        
         cap = cv2.VideoCapture(cam_id)
         for i in range(3):
             print(f"[INFO] Training template {i+1}/3. Press SPACE to freeze frame.")
@@ -283,21 +196,11 @@ def main():
     if templates:
         print("[INFO] Starting combined color filtering and template matching detection. Press ESC to exit.")
         cap = cv2.VideoCapture(cam_id)
-        # HSV red color range (hardcoded - proven to work)
+        # HSV red color range (can be tuned)
         lower_red1 = np.array([0, 100, 100])
         upper_red1 = np.array([10, 255, 255])
         lower_red2 = np.array([160, 100, 100])
         upper_red2 = np.array([179, 255, 255])
-        
-        # Save HSV ranges to calibration file for host program
-        with open(calib_path, "a") as f:
-            f.write(f"ball_type = red_ball\n")
-            f.write(f"hsv_lower1 = {lower_red1.tolist()}\n")
-            f.write(f"hsv_upper1 = {upper_red1.tolist()}\n")
-            f.write(f"hsv_lower2 = {lower_red2.tolist()}\n")
-            f.write(f"hsv_upper2 = {upper_red2.tolist()}\n")
-        print("[INFO] HSV color ranges saved to calibration file.")
-        
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -350,4 +253,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
