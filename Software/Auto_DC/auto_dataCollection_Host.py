@@ -30,14 +30,12 @@ import sys
 import select
 import numpy as np
 
-#TODO Add "heat until temp = ... functionality"
 #TODO Check on joule heating vs current... and also expected current fluctuation (RE Griff/Kris)
 
-
 ############################ Characterization Parameters #######################
-Volts   = 6.0      # volts
-Current = 1.5      # amperes
-Load    = 100      # grams
+Volts   = 6.0          # volts 
+Current = 1.5          # amperes 
+Load    = 100          # grams 
 
 ################################## CONFIGURATION ##############################
 # Set data logging directory
@@ -45,44 +43,45 @@ LOG_DIR = r"C:\Users\Owner\Desktop\SERC\STARFISH_Project\Software\STARFISH\Therm
 FRAME_DIR = os.path.join(LOG_DIR, "frames")
 
 # Set port and IP info (currently listening for any connecting ip)
-LISTEN_IP = "0.0.0.0"  # listens for anything trying to connect
+LISTEN_IP = "0.0.0.0"           # listens for anything trying to connect
 LISTEN_PORT = 5005
 
 # Define camera IDs in use
 CAMERA_IDS = [0] #[0, 1, 2, 3, 4]  # 0: top for X/Y, 1-4: for Z
 
 # Alignment tolerance in milliseconds
-ALIGNMENT_WINDOW_MS  = 400  # ms, for matching position and temperature data
+ALIGNMENT_WINDOW_MS  = 400     # ms, for matching position and temperature data
 
 # Buffer sizes
-THERMO_BUFFER_SIZE   = 100  # Pi packet buffer size
-POSITION_BUFFER_SIZE = 100  # Host data buffer size
-time_offset = 0.0           # Time offset between Pi and Host clocks
+THERMO_BUFFER_SIZE   = 100     # Pi packet buffer size
+POSITION_BUFFER_SIZE = 100     # Host data buffer size
+time_offset = 0.0              # Time offset between Pi and Host clocks
 
 # Cleanup interval and retention
-CLEANUP_INTERVAL     = 0.5  # seconds, how often to clean up old data
-BUFFER_RETENTION_SEC = 1.0  # seconds, how long to keep unmatched data
+CLEANUP_INTERVAL     = 0.5     # seconds, how often to clean up old data
+BUFFER_RETENTION_SEC = 1.0     # seconds, how long to keep unmatched data
 
 # Position sample rate
-POSITION_SAMPLE_RATE = 0.25 # seconds, how often to sample position data
+POSITION_SAMPLE_RATE = 0.25    # seconds, how often to sample position data
 
 # Thermocouple configuration for the Pi
-TC_CHANNELS    = [0]        # [0, 1, 2, 3], 4 max channels
-TC_TYPE = "J"               # Thermocouple type: J, K, etc.
-SEND_INTERVAL  = 0.25       # seconds between temperature samples
+TC_CHANNELS          = [0]     # [0, 1, 2, 3], 4 max channels
+TC_TYPE = "J"                  # Thermocouple type: J, K, etc.
+SEND_INTERVAL        = 1.00    # seconds between temperature samples (1Hz Max for now)
 
 # Set number of samples to collect, and interval between pulses
-NUM_RUNS = 10
-INTER_RUN_DELAY = 100       # Interval time between pulses in seconds
-LEAD_TIME = 2.0             # seconds, lead-in before SMA pulse            
+NUM_RUNS             = 10
+INTER_RUN_DELAY      = 100     # Interval time between pulses in seconds
+LEAD_TIME            = 2.0     # seconds, lead-in before SMA pulse            
 
-# New: Temperature-based SMA control
-TARGET_TEMP_C = 70.0        # Target temperature in Celsius for SMA activation
-MAX_HEAT_TIME = 90.0        # Maximum time to allow heating (seconds) for safety
+# Temperature-based SMA control
+TARGET_TEMP_C        = 45.0    # Target temperature in Celsius for SMA activation
+END_TEMP_MARGIN      = 5.0     # Temperature margin for considering SMA relaxed
+MAX_HEAT_TIME        = 120.0   # Maximum time to allow heating (seconds) for safety
 
 # Error handling configuration
-MAX_CONSECUTIVE_ERRORS = 10  # Exit after this many consecutive errors
-error_count = 0  # Counter for consecutive errors
+MAX_CONSECUTIVE_ERRORS = 10 # Exit after this many consecutive errors
+
 
 # TODO: Add support for multiple ball types - currently only supports one ball type
 # HSV presets moved to calibration script - these are now loaded from calibration_data.txt
@@ -94,6 +93,7 @@ DEBUG = True
 
 #################################### SETUP ####################################
 os.makedirs(FRAME_DIR, exist_ok=True)
+error_count = 0             # Counter for consecutive errors
 
 # Initialize cameras using openCV
 cams = []
@@ -131,7 +131,8 @@ config_packet = {
     "run_time": INTER_RUN_DELAY,
     "lead_time": LEAD_TIME,
     "target_temp_c": TARGET_TEMP_C,
-    "max_heat_time": MAX_HEAT_TIME
+    "max_heat_time": MAX_HEAT_TIME,
+    "end_temp_margin": END_TEMP_MARGIN
 }
 conn.sendall(json.dumps(config_packet).encode())
 
@@ -534,15 +535,27 @@ def run_data_collection(run_index):
         matches = 0
         sma_start_time = None
         run_start_time = time.time()
+        heating_phase_active = False
+        relaxation_detected = False
+        ambient_temp = None
+        last_temp = None
+        initial_ambient_reported = False
+
         # Helper to convert position_buffer timestamp to float
         def get_pos_ts(pos):
             return parser.isoparse(pos[0]).timestamp()
 
         while True:
-            # Exit if run time exceeded
-            if time.time() - run_start_time > (INTER_RUN_DELAY + PULSE_DURATION + 5):  # Add buffer for safety
-                print("[INFO] Run time exceeded, ending run.")
+            # Exit if relaxation is detected
+            if relaxation_detected:
+                print(f"[INFO] SMA relaxation detected. Ending run.")
                 break
+
+            # Overall safety timeout based on the inter-run delay
+            if time.time() - run_start_time > (INTER_RUN_DELAY + MAX_HEAT_TIME + 10): # Add buffer for safety
+                print("[WARN] Run exceeded max time. Ending run for safety.")
+                break
+
             # a. Capture position data
             position_sample = capture_position()
             if position_sample is not None:
@@ -570,6 +583,38 @@ def run_data_collection(run_index):
                 try:
                     data = json.loads(msg)
                     if "timestamp" in data and "temperatures_C" in data:
+                        # Report initial ambient temperature at start of trial
+                        if not initial_ambient_reported and not data.get('sma_active', False):
+                            initial_temp = data['temperatures_C'].get('ch0')
+                            if initial_temp is not None:
+                                print(f"[INFO] Initial ambient temperature: {initial_temp:.2f}°C")
+                                initial_ambient_reported = True
+                        
+                        # Detect SMA state changes and relaxation
+                        if "sma_active" in data:
+                            current_sma_state = data['sma_active']
+                            if not heating_phase_active and current_sma_state:
+                                heating_phase_active = True
+                                print("[INFO] Host detected SMA pulse start.")
+                            if heating_phase_active and not current_sma_state:
+                                print("[INFO] Host detected SMA pulse end. Monitoring for relaxation...")
+                        
+                        # Check for relaxation (temperature returned to ambient range)
+                        if heating_phase_active and not data.get('sma_active', False):
+                            current_temp = data['temperatures_C'].get('ch0')
+                            if current_temp is not None:
+                                if ambient_temp is None:
+                                    # Capture ambient temp from first reading after SMA turns off
+                                    ambient_temp = current_temp
+                                    print(f"[INFO] Captured ambient temperature: {ambient_temp:.2f}°C")
+                                elif last_temp is not None:
+                                    # Check if temperature has stabilized near ambient
+                                    temp_diff = abs(current_temp - ambient_temp)
+                                    if temp_diff <= END_TEMP_MARGIN:
+                                        relaxation_detected = True
+                                        print(f"[INFO] Relaxation detected: temp={current_temp:.2f}°C, ambient={ambient_temp:.2f}°C, diff={temp_diff:.2f}°C")
+                                last_temp = current_temp
+                        
                         thermo_ts = data['timestamp']
                         thermo_buffer.append((thermo_ts, data))
                         

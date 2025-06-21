@@ -125,8 +125,9 @@ TC_TYPE = getattr(TcTypes, f"TYPE_{config.get('tc_type', 'J')}")
 NUM_RUNS = config.get("num_runs", 1)
 RUN_TIME = config.get("run_time", 20.0)                  # seconds
 LEAD_TIME = config.get("lead_time", 2.0)                 # seconds
-TARGET_TEMP_C = config.get("target_temp_c", 45.0)        # celsius
+TARGET_TEMP_C = config.get("target_temp_c", 70.0)        # celsius
 MAX_HEAT_TIME = config.get("max_heat_time", 90.0)        # seconds
+END_TEMP_MARGIN = config.get("end_temp_margin", 2.0)     # New
 
 for ch in TC_CHANNELS:
     hat.tc_type_write(ch, TC_TYPE)
@@ -156,7 +157,8 @@ def data_collection_loop(run_index):
     pulse_start_time = None
     last_sample_time = time.time()
     pulse_sent = False
-    temp_reached = False
+    heating_should_stop = False
+    stop_reason = ""
     main_tc_channel = TC_CHANNELS[0] if TC_CHANNELS else 0
 
     while True:
@@ -180,28 +182,30 @@ def data_collection_loop(run_index):
             send_with_retry((pulse_start_msg + "\n").encode())
 
         # Check temperature and timeout for SMA deactivation
-        if sma_active and pulse_sent:
+        if sma_active and pulse_sent and not heating_should_stop:
             try:
-                temp_val = hat.t_in_read(main_tc_channel)
+                current_temp = hat.t_in_read(main_tc_channel)
                 if DEBUG:
-                    print(f"[DEBUG] Main TC channel {main_tc_channel} temp: {temp_val:.2f} C (target: {TARGET_TEMP_C})")
-                if temp_val >= TARGET_TEMP_C:
-                    print(f"[INFO] Target temperature {TARGET_TEMP_C}C reached (actual: {temp_val:.2f}C). Deactivating SMA.")
-                    temp_reached = True
-                elif (now - pulse_start_time) >= MAX_HEAT_TIME:
-                    print(f"[WARN] Max heat time {MAX_HEAT_TIME}s exceeded. Deactivating SMA for safety.")
-                    temp_reached = True
-            except Exception as e:
-                print(f"[ERROR] Temp read failed for SMA control: {e}")
-                # For safety, deactivate if temp read fails repeatedly (optional)
-                if (now - pulse_start_time) >= MAX_HEAT_TIME:
-                    temp_reached = True
+                    print(f"[DEBUG] Main TC channel {main_tc_channel} temp: {current_temp:.2f} C (target: {TARGET_TEMP_C})")
 
-            if temp_reached:
+                # 1. Check for target temperature
+                if current_temp >= TARGET_TEMP_C:
+                    heating_should_stop = True
+                    stop_reason = "target_temp"
+                # 2. Check for max heat time safety override
+                elif (now - pulse_start_time) >= MAX_HEAT_TIME:
+                    heating_should_stop = True
+                    stop_reason = "max_heat_time"
+
+                if heating_should_stop:
+                    GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
+                    sma_active = False
+                    print(f"[INFO] SMA pulse ended (reason: {stop_reason}). Temp: {current_temp:.2f}C, Time: {now - pulse_start_time:.1f}s")
+
+            except Exception as e:
+                print(f"[ERROR] Temp read failed for SMA control, deactivating for safety: {e}")
                 GPIO.output(SMA_GPIO_PIN, GPIO.LOW)
                 sma_active = False
-                if DEBUG:
-                    print(f"[INFO] SMA pulse ended at t={elapsed:.2f}s (reason: {'temp' if temp_val >= TARGET_TEMP_C else 'timeout'})")
 
         # Sample temperature and send to host at fixed interval
         if now >= last_sample_time:
